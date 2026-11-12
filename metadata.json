@@ -1,0 +1,6 @@
+{
+  "name": "KallaxBox - Ikea Kallax Board Game Shelf Manager",
+  "description": "Gestisci e visualizza i giochi da tavolo nei vani IKEA Kallax con calcolo dello spazio in tempo reale, rotazione 3D a 90° e importazione da BGG e BG Stats.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
