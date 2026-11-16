@@ -309,3 +309,15 @@ export function parseGeminiJsonDimensions(
 
   return parseDimensionsFromText(cleaned);
 }
+
+/**
+ * Detects whether an error from @google/genai represents a 429 / RESOURCE_EXHAUSTED quota/rate-limit error.
+ */
+export function isGeminiRateLimitError(err: any): boolean {
+  if (!err) return false;
+  const status = Number(err.status ?? err.code ?? err?.error?.code);
+  if (status === 429) return true;
+  const msg = String(err.message || err?.error?.message || err);
+  return /\b429\b|RESOURCE_EXHAUSTED|rate[\s_-]*limit|quota/i.test(msg);
+}
+

@@ -381,7 +381,9 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
           }
           setDimensionSource('Stima standard');
           setBggSyncMessage({
-            text: `Dimensioni reali non trovate online per "${trimmed}". Inseriscile manualmente o usa "Incolla Misure BGG".`,
+            text: data.rateLimited
+              ? `Fonti web gratuite senza risultato per "${trimmed}" e ricerca AI temporaneamente limitata (429). Riprova tra un minuto, controlla la quota API in Impostazioni > Secrets, oppure usa "Incolla Misure BGG" / inserimento manuale.`
+              : `Dimensioni reali non trovate online per "${trimmed}". Inseriscile manualmente o usa "Incolla Misure BGG".`,
             success: false,
           });
           return;

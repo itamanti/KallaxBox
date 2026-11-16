@@ -21,6 +21,10 @@ import {
   getNextValidBoxPose,
 } from './utils/kallaxMath';
 import { syncCubePlacedBoxesPositions } from './utils/kallaxPhysics';
+import {
+  clearAllShelvesPlacements,
+  clearSingleShelfPlacements,
+} from './utils/shelfActions';
 import { createTimeoutSignal } from './utils/network';
 import { ShelfHeader } from './components/ShelfHeader';
 import { ShelfOverview } from './components/ShelfOverview';
@@ -331,11 +335,27 @@ export default function App() {
   };
 
   const handleClearShelf = () => {
-    setPlacedBoxes([]);
+    const { shelves: nextShelves } = clearSingleShelfPlacements(shelves, activeShelf.id);
+    setShelves(nextShelves);
     setSelectedBoxId(null);
+    setCubeDetailCoords(null);
     setToast({
       type: 'success',
-      message: `Scaffale "${config.name}" svuotato. Tutti i giochi sono tornati nella libreria.`,
+      message: `Scaffale "${config.name}" svuotato. Tutti i giochi sono rimasti nella libreria.`,
+    });
+  };
+
+  const handleClearAllShelves = () => {
+    const { shelves: nextShelves, removedCount } = clearAllShelvesPlacements(shelves);
+    setShelves(nextShelves);
+    setSelectedBoxId(null);
+    setCubeDetailCoords(null);
+    setToast({
+      type: 'success',
+      message:
+        removedCount > 0
+          ? `${shelves.length > 1 ? 'Tutti gli scaffali svuotati' : `Scaffale "${config.name}" svuotato`} (${removedCount} ${removedCount === 1 ? 'gioco rimesso' : 'giochi rimessi'} nella libreria).`
+          : 'Gli scaffali sono già vuoti. La libreria è intatta.',
     });
   };
 
@@ -1148,6 +1168,7 @@ export default function App() {
           onSelectShelf={handleSelectShelf}
           onAddShelf={handleAddShelf}
           onRenameShelf={handleRenameShelf}
+          onClearAllShelves={handleClearAllShelves}
         />
 
         {/* Right Column: Game Collection Drawer / Side Tray */}
@@ -1245,7 +1266,9 @@ export default function App() {
         gamesMap={gamesMap}
         onAutoOptimizeAll={handleAutoOptimizeAll}
         onClearShelf={handleClearShelf}
+        onClearAllShelves={handleClearAllShelves}
         shelvesCount={shelves.length}
+        totalPlacedCount={placedGameIds.size}
         onDeleteShelf={handleDeleteShelf}
         onAddShelf={handleAddShelf}
       />

@@ -9,6 +9,7 @@ import {
 import { KallaxCubeView } from './KallaxCubeView';
 import { Kallax3DScene } from './Kallax3DScene';
 import { canGameFitInCube } from '../utils/kallaxMath';
+import { countPlacedBoxesAcrossShelves } from '../utils/shelfActions';
 import {
   Sparkles,
   SlidersHorizontal,
@@ -30,6 +31,7 @@ import {
   LayoutGrid,
   ChevronDown,
   Pencil,
+  PackageOpen,
 } from 'lucide-react';
 
 interface ShelfOverviewProps {
@@ -60,6 +62,7 @@ interface ShelfOverviewProps {
   onSelectShelf?: (shelfId: string) => void;
   onAddShelf?: () => void;
   onRenameShelf?: (shelfId: string, newName: string) => void;
+  onClearAllShelves?: () => void;
 }
 
 // Official IKEA Kallax standard models
@@ -110,9 +113,15 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
   onSelectShelf,
   onAddShelf,
   onRenameShelf,
+  onClearAllShelves,
 }) => {
   const [isRenaming, setIsRenaming] = useState(false);
   const [tempShelfName, setTempShelfName] = useState(config.name);
+  const [isConfirmClearShelvesOpen, setIsConfirmClearShelvesOpen] = useState(false);
+
+  const totalPlacedCount = shelves
+    ? countPlacedBoxesAcrossShelves(shelves)
+    : placedBoxes.length;
 
   // Synchronize when config.name or shelf changes
   React.useEffect(() => {
@@ -368,6 +377,24 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
             <span className="sm:hidden">Ottimizza</span>
           </button>
 
+          {/* Empty Shelves (keeps library intact) */}
+          {onClearAllShelves && (
+            <button
+              type="button"
+              onClick={() => setIsConfirmClearShelvesOpen(true)}
+              disabled={totalPlacedCount === 0}
+              className="px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-sky-950/50 border border-slate-800 hover:border-sky-500/50 text-slate-200 hover:text-sky-300 text-xs font-semibold transition-all flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-slate-950 disabled:hover:border-slate-800 disabled:hover:text-slate-200"
+              title={
+                totalPlacedCount > 0
+                  ? 'Svuota gli scaffali mantenendo tutti i giochi nella libreria'
+                  : 'Gli scaffali sono già vuoti'
+              }
+            >
+              <PackageOpen className="w-3.5 h-3.5 text-sky-400" />
+              <span>Svuota scaffali</span>
+            </button>
+          )}
+
           {/* Dedicated Shelf Menu Button */}
           <button
             onClick={onOpenShelfMenu}
@@ -618,6 +645,56 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
           <span>Interno vano Kallax: 33.5 × 33.5 × 39 cm</span>
         </div>
       </div>
+
+      {/* Modal Conferma Svuota Scaffali (Libreria intatta) */}
+      {isConfirmClearShelvesOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="clear-shelves-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150"
+        >
+          <div className="bg-slate-900 border border-sky-500/40 rounded-2xl w-full max-w-sm p-5 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+                <PackageOpen className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 id="clear-shelves-title" className="text-sm font-bold text-white">
+                  Svuota Scaffali
+                </h3>
+                <p className="text-xs text-sky-300 font-semibold">
+                  La libreria giochi rimane intatta
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Vuoi togliere tutti i <strong className="text-white">{totalPlacedCount} {totalPlacedCount === 1 ? 'gioco posizionato' : 'giochi posizionati'}</strong> {shelves && shelves.length > 1 ? `da tutti i ${shelves.length} scaffali` : 'dallo scaffale'}? Torneranno subito nella sezione <strong className="text-amber-300">Da Posizionare</strong> della libreria senza eliminare nulla.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsConfirmClearShelvesOpen(false)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                Annulla
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onClearAllShelves?.();
+                  setUnlockedCubeKeys(new Set());
+                  setIsConfirmClearShelvesOpen(false);
+                }}
+                className="px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-500 hover:bg-sky-400 text-slate-950 transition-colors flex items-center gap-1.5 shadow-md shadow-sky-500/20 cursor-pointer active:scale-95"
+              >
+                <PackageOpen className="w-3.5 h-3.5" />
+                <span>Conferma svuotamento</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

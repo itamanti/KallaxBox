@@ -18,6 +18,7 @@ import {
   extractAmazonAsinsFromSearchHtml,
   extractAmazonProductDimensions,
   parseGeminiJsonDimensions,
+  isGeminiRateLimitError,
 } from './src/utils/dimensionSearch.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -402,20 +403,53 @@ app.get('/api/bgg/search', async (req: Request, res: Response) => {
   return res.json({ results: [fallbackResult] });
 });
 
+interface WebDimResult {
+  width: number;
+  height: number;
+  depth: number;
+  source: string;
+  bggId?: number;
+  rateLimited?: boolean;
+}
+
+const webDimensionsCache = new Map<string, { result: WebDimResult | null; expiresAt: number }>();
+let geminiCooldownUntil = 0;
+let geminiLastCallAt = 0;
+let geminiChain: Promise<unknown> = Promise.resolve();
+
+function runSerializedGemini<T>(fn: () => Promise<T>): Promise<T> {
+  const next = geminiChain.then(async () => {
+    const elapsed = Date.now() - geminiLastCallAt;
+    if (elapsed < 1000) {
+      await new Promise((r) => setTimeout(r, 1000 - elapsed));
+    }
+    geminiLastCallAt = Date.now();
+    return fn();
+  });
+  geminiChain = next.catch(() => undefined);
+  return next;
+}
+
 /**
  * Search the web for actual board game box dimensions (width, height, depth in cm).
  * Tier 1: Resolve BGG ID (if not provided) via Wikidata P2339 + multi-lang Wikipedia -> Geekdo boardgameversion.
  * Tier 2: Wikipedia article extract text dimension parsing.
- * Tier 3: Gemini 4 Hydrogen with Google Search Grounding (if GEMINI_API_KEY is available).
- * Tier 4: Amazon.it product search & specification table parsing.
+ * Tier 3: Amazon.it product search & specification table parsing (free, no quota).
+ * Tier 4: Gemini 4 Hydrogen with Google Search Grounding (if GEMINI_API_KEY is available, serialized + cooldown on 429).
  */
 async function searchWebBoxDimensions(
   gameName: string,
   bggId?: number,
   year?: number
-): Promise<{ width: number; height: number; depth: number; source: string; bggId?: number } | null> {
+): Promise<WebDimResult | null> {
   const cleanName = (gameName || '').replace(/(\(.*?\)|\[.*?\])/g, '').trim();
   if (!cleanName && (!bggId || bggId <= 0)) return null;
+
+  const cacheKey = `${bggId && bggId > 0 ? bggId : 0}:${normalizeGameName(cleanName)}`;
+  const cached = webDimensionsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.result;
+  }
 
   let resolvedBggIds: number[] = bggId && bggId > 0 ? [bggId] : [];
   if (resolvedBggIds.length === 0 && cleanName) {
@@ -446,13 +480,15 @@ async function searchWebBoxDimensions(
         const vData = await vResp.json();
         const bestDims = selectBestGeekdoVersionDimensions(vData.items || [], cleanName);
         if (bestDims) {
-          return {
+          const hit: WebDimResult = {
             width: bestDims.width,
             height: bestDims.height,
             depth: bestDims.depth,
             source: 'BGG Edizioni Reali',
             bggId: candidateBggId,
           };
+          webDimensionsCache.set(cacheKey, { result: hit, expiresAt: Date.now() + 30 * 60_000 });
+          return hit;
         }
       }
 
@@ -467,13 +503,15 @@ async function searchWebBoxDimensions(
           .join('\n');
         const parsedDims = parseDimensionsFromText(textToScan);
         if (parsedDims) {
-          return {
+          const hit: WebDimResult = {
             width: parsedDims.width,
             height: parsedDims.height,
             depth: parsedDims.depth,
             source: 'BGG Database',
             bggId: candidateBggId,
           };
+          webDimensionsCache.set(cacheKey, { result: hit, expiresAt: Date.now() + 30 * 60_000 });
+          return hit;
         }
       }
     } catch {
@@ -498,90 +536,24 @@ async function searchWebBoxDimensions(
         for (const p of pages) {
           const parsedDims = parseDimensionsFromText(p.extract || '');
           if (parsedDims) {
-            return {
+            const hit: WebDimResult = {
               width: parsedDims.width,
               height: parsedDims.height,
               depth: parsedDims.depth,
               source: 'Wikipedia',
               bggId: resolvedBggIds[0],
             };
+            webDimensionsCache.set(cacheKey, { result: hit, expiresAt: Date.now() + 30 * 60_000 });
+            return hit;
           }
         }
       }
     } catch {
-      // Continue to Gemini / Amazon
+      // Continue to Amazon / Gemini
     }
   }
 
-  // Tier 3: Gemini 4 Hydrogen with Google Search Grounding
-  if (process.env.GEMINI_API_KEY && cleanName) {
-    try {
-      const ai = new GoogleGenAI({
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
-
-      const prompt = `Search for the exact physical retail box dimensions (width, height, depth in centimeters) of the board game "${cleanName}"${year ? ` (${year})` : ''}.
-Convert inches or millimeters to centimeters (1 inch = 2.54 cm, rounded to 1 decimal place).
-Reply ONLY with a valid JSON object on one line:
-{"found": true, "width": 29.6, "height": 29.6, "depth": 7.5}
-If you cannot verify the real box dimensions from search results or reliable knowledge, reply with:
-{"found": false}`;
-
-      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 9000));
-      const geminiTask = (async () => {
-        const modelsToTry: Array<{ model: string; useSearch: boolean }> = [
-          { model: 'gemini-4-hydrogen', useSearch: true },
-          { model: 'gemini-3.1-flash-lite', useSearch: false },
-        ];
-        for (const attempt of modelsToTry) {
-          try {
-            const config: any = attempt.useSearch
-              ? {
-                  tools: [{ googleSearch: {} }],
-                  thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-                }
-              : {
-                  responseMimeType: 'application/json',
-                };
-
-            const response = await ai.models.generateContent({
-              model: attempt.model,
-              contents: prompt,
-              config,
-            });
-
-            const parsed = parseGeminiJsonDimensions(response.text || '');
-            if (parsed) {
-              return {
-                width: parsed.width,
-                height: parsed.height,
-                depth: parsed.depth,
-                source: 'Gemini AI (Google Search)',
-                bggId: resolvedBggIds[0],
-              };
-            }
-          } catch (err: any) {
-            console.warn(`Gemini (${attempt.model}) error:`, err?.status || err?.code || err?.message);
-          }
-        }
-        return null;
-      })();
-
-      const geminiResult = await Promise.race([geminiTask, timeoutPromise]);
-      if (geminiResult) {
-        return geminiResult;
-      }
-    } catch (err: any) {
-      console.warn('Gemini client error:', err?.message || err);
-    }
-  }
-
-  // Tier 4: Amazon.it Product Search & Specification Table Fallback
+  // Tier 3: Amazon.it Product Search & Specification Table (no LLM quota consumed)
   if (cleanName) {
     try {
       const searchUrl = `https://www.amazon.it/s?k=${encodeURIComponent(`${cleanName} gioco da tavolo`)}`;
@@ -608,22 +580,112 @@ If you cannot verify the real box dimensions from search results or reliable kno
             const dpHtml = await dpResp.text();
             const parsedDims = extractAmazonProductDimensions(dpHtml);
             if (parsedDims) {
-              return {
+              const hit: WebDimResult = {
                 width: parsedDims.width,
                 height: parsedDims.height,
                 depth: parsedDims.depth,
                 source: 'Ricerca Web (Amazon)',
                 bggId: resolvedBggIds[0],
               };
+              webDimensionsCache.set(cacheKey, { result: hit, expiresAt: Date.now() + 30 * 60_000 });
+              return hit;
             }
           }
         }
       }
     } catch {
-      // Return null
+      // Continue to Gemini fallback
     }
   }
 
+  // Tier 4: Gemini 4 Hydrogen with Google Search Grounding (serialized + backoff + 60s cooldown on 429)
+  if (process.env.GEMINI_API_KEY && cleanName && Date.now() >= geminiCooldownUntil) {
+    try {
+      const ai = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      const prompt = `Search for the exact physical retail box dimensions (width, height, depth in centimeters) of the board game "${cleanName}"${year ? ` (${year})` : ''}.
+Convert inches or millimeters to centimeters (1 inch = 2.54 cm, rounded to 1 decimal place).
+Reply ONLY with a valid JSON object on one line:
+{"found": true, "width": 29.6, "height": 29.6, "depth": 7.5}
+If you cannot verify the real box dimensions from search results or reliable knowledge, reply with:
+{"found": false}`;
+
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 11000));
+      const geminiTask = runSerializedGemini(async () => {
+        if (Date.now() < geminiCooldownUntil) return null;
+
+        const modelsToTry: Array<{ model: string; useSearch: boolean }> = [
+          { model: 'gemini-4-hydrogen', useSearch: true },
+          { model: 'gemini-3.1-flash-lite', useSearch: false },
+        ];
+
+        for (const attempt of modelsToTry) {
+          if (Date.now() < geminiCooldownUntil) break;
+
+          const config: any = attempt.useSearch
+            ? {
+                tools: [{ googleSearch: {} }],
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+              }
+            : {
+                responseMimeType: 'application/json',
+              };
+
+          for (let retry = 0; retry < 2; retry++) {
+            try {
+              const response = await ai.models.generateContent({
+                model: attempt.model,
+                contents: prompt,
+                config,
+              });
+
+              const parsed = parseGeminiJsonDimensions(response.text || '');
+              if (parsed) {
+                return {
+                  width: parsed.width,
+                  height: parsed.height,
+                  depth: parsed.depth,
+                  source: 'Gemini AI (Google Search)',
+                  bggId: resolvedBggIds[0],
+                } as WebDimResult;
+              }
+              break;
+            } catch (err: any) {
+              if (isGeminiRateLimitError(err)) {
+                if (retry === 0) {
+                  await new Promise((r) => setTimeout(r, 1500));
+                  continue;
+                }
+                geminiCooldownUntil = Date.now() + 60_000;
+                break;
+              }
+              break;
+            }
+          }
+        }
+
+        return null;
+      });
+
+      const geminiResult = await Promise.race([geminiTask, timeoutPromise]);
+      if (geminiResult) {
+        webDimensionsCache.set(cacheKey, { result: geminiResult, expiresAt: Date.now() + 30 * 60_000 });
+        return geminiResult;
+      }
+    } catch {
+      // Fall through cleanly
+    }
+  }
+
+  const missTtl = Date.now() < geminiCooldownUntil ? 60_000 : 5 * 60_000;
+  webDimensionsCache.set(cacheKey, { result: null, expiresAt: Date.now() + missTtl });
   return null;
 }
 
@@ -669,6 +731,7 @@ app.get('/api/games/web-dimensions', async (req: Request, res: Response) => {
   return res.json({
     found: false,
     foundOnWeb: false,
+    rateLimited: Date.now() < geminiCooldownUntil,
     width: local.width,
     height: local.height,
     depth: local.depth,

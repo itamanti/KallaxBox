@@ -30,7 +30,9 @@ interface ShelfMenuModalProps {
   gamesMap: Record<string, GameBox>;
   onAutoOptimizeAll: () => void;
   onClearShelf?: () => void;
+  onClearAllShelves?: () => void;
   shelvesCount: number;
+  totalPlacedCount?: number;
   onDeleteShelf?: () => void;
   onAddShelf?: () => void;
 }
@@ -70,7 +72,9 @@ export const ShelfMenuModal: React.FC<ShelfMenuModalProps> = ({
   gamesMap,
   onAutoOptimizeAll,
   onClearShelf,
+  onClearAllShelves,
   shelvesCount,
+  totalPlacedCount = placedBoxes.length,
   onDeleteShelf,
   onAddShelf,
 }) => {
@@ -80,6 +84,7 @@ export const ShelfMenuModal: React.FC<ShelfMenuModalProps> = ({
   const [cols, setCols] = useState(config.cols);
   const [shelfColor, setShelfColor] = useState<KallaxConfig['shelfColor']>(config.shelfColor);
   const [hasUnsavedFormat, setHasUnsavedFormat] = useState(false);
+  const [confirmClearTarget, setConfirmClearTarget] = useState<'single' | 'all' | null>(null);
 
   React.useEffect(() => {
     if (isOpen) {
@@ -88,6 +93,7 @@ export const ShelfMenuModal: React.FC<ShelfMenuModalProps> = ({
       setCols(config.cols);
       setShelfColor(config.shelfColor);
       setHasUnsavedFormat(false);
+      setConfirmClearTarget(null);
     }
   }, [config.name, config.rows, config.cols, config.shelfColor, isOpen]);
 
@@ -473,30 +479,93 @@ export const ShelfMenuModal: React.FC<ShelfMenuModalProps> = ({
                 </button>
               </div>
 
-              {/* Clear Shelf */}
+              {/* Clear Active Shelf */}
               {onClearShelf && placedBoxes.length > 0 && (
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">
                   <div>
                     <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
                       <PackageOpen className="w-4 h-4 text-sky-400" />
-                      Svuota Scaffale
+                      Svuota Questo Scaffale
                     </h4>
                     <p className="text-[11px] text-slate-400">
                       Rimuove tutti i giochi da questo scaffale riportandoli nella libreria (nessun gioco verrà eliminato).
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (window.confirm('Vuoi davvero svuotare questo scaffale? I giochi rimarranno nella libreria non riposti.')) {
-                        onClearShelf();
-                        onClose();
-                      }
-                    }}
-                    className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all shrink-0 cursor-pointer"
-                  >
-                    Svuota
-                  </button>
+                  {confirmClearTarget === 'single' ? (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearTarget(null)}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+                      >
+                        Annulla
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClearShelf();
+                          setConfirmClearTarget(null);
+                          onClose();
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-bold cursor-pointer"
+                      >
+                        Conferma
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearTarget('single')}
+                      className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all shrink-0 cursor-pointer"
+                    >
+                      Svuota
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Clear All Shelves */}
+              {onClearAllShelves && shelvesCount > 1 && totalPlacedCount > 0 && (
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <PackageOpen className="w-4 h-4 text-amber-400" />
+                      Svuota Tutti gli Scaffali ({shelvesCount})
+                    </h4>
+                    <p className="text-[11px] text-slate-400">
+                      Rimuove tutte le {totalPlacedCount} scatole da tutti gli scaffali mantenendo intatta la libreria giochi.
+                    </p>
+                  </div>
+                  {confirmClearTarget === 'all' ? (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setConfirmClearTarget(null)}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+                      >
+                        Annulla
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClearAllShelves();
+                          setConfirmClearTarget(null);
+                          onClose();
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-bold cursor-pointer"
+                      >
+                        Conferma
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmClearTarget('all')}
+                      className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-all shrink-0 cursor-pointer"
+                    >
+                      Svuota tutti
+                    </button>
+                  )}
                 </div>
               )}
 

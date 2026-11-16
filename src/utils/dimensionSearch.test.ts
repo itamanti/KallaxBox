@@ -7,6 +7,7 @@ import {
   extractAmazonAsinsFromSearchHtml,
   extractAmazonProductDimensions,
   parseGeminiJsonDimensions,
+  isGeminiRateLimitError,
 } from './dimensionSearch';
 import { lookupBoardGameInfo, parseDimensionsFromText } from '../data/boardGameDatabase';
 
@@ -114,3 +115,11 @@ test('parseGeminiJsonDimensions extracts dimensions from fenced JSON or grounded
   const prose = 'The retail box of Bomb Busters measures 29.7 x 29.7 x 7.1 cm according to BGG.';
   assert.deepEqual(parseGeminiJsonDimensions(prose), { width: 29.7, height: 29.7, depth: 7.1 });
 });
+
+test('isGeminiRateLimitError identifies HTTP 429 and RESOURCE_EXHAUSTED errors', () => {
+  assert.equal(isGeminiRateLimitError({ status: 429 }), true);
+  assert.equal(isGeminiRateLimitError(new Error('got status: 429 RESOURCE_EXHAUSTED')), true);
+  assert.equal(isGeminiRateLimitError({ message: 'Quota exceeded for model' }), true);
+  assert.equal(isGeminiRateLimitError({ status: 404, message: 'Not found' }), false);
+});
+
