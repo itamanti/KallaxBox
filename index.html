@@ -10,6 +10,7 @@
     <meta property="og:type" content="website" />
     <meta name="theme-color" content="#f59e0b" />
     <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="KallaxBox" />
     <link rel="icon" type="image/svg+xml" href="./icon.svg" />
@@ -18,11 +19,33 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-    <script type="module" crossorigin src="./assets/index-DCp4SRe2.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-BJV-6_nW.css">
+    <script type="module" crossorigin src="./assets/index-CwgBPm-9.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BO7KJXQg.css">
   </head>
   <body class="bg-slate-950 text-slate-100 antialiased selection:bg-amber-500 selection:text-slate-950">
     <div id="root"></div>
+    <script>
+      (function () {
+        if ('serviceWorker' in navigator) {
+          var appScope = new URL('./', window.location.href).href;
+          navigator.serviceWorker.getRegistrations().then(function (regs) {
+            for (var i = 0; i < regs.length; i++) {
+              if (regs[i].scope === appScope) {
+                regs[i].unregister();
+              }
+            }
+          }).catch(function () {});
+        }
+        window.addEventListener('vite:preloadError', function () {
+          try {
+            if (!sessionStorage.getItem('kallax_chunk_reload')) {
+              sessionStorage.setItem('kallax_chunk_reload', '1');
+              window.location.reload();
+            }
+          } catch (e) {}
+        });
+      })();
+    </script>
   </body>
 </html>
 
