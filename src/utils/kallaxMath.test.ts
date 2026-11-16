@@ -839,6 +839,66 @@ test('parseBgStatsExportDetails assigns correct dimensionSource provenance', () 
   assert.equal(unknown?.dimensionSource, 'Stima standard');
 });
 
+test('canGameFitInCube allows deep boxes like Catan Big Box that fit width/height dividers and protrude in depth', () => {
+  const cubeW = 33.5;
+  const cubeH = 33.5;
+  const cubeD = 39.0;
+
+  // Catan Big Box: 43.5 x 31.5 x 9.5 cm (fits 31.5 <= 33.5 opening, protrudes 43.5 - 39.0 = 4.5 cm in depth)
+  const catanBigBox: GameBox = {
+    id: 'g-catan-big',
+    name: 'Catan Big Box',
+    width: 43.5,
+    height: 31.5,
+    depth: 9.5,
+  };
+
+  const fitAuto = canGameFitInCube(cubeW, cubeH, cubeD, [], catanBigBox, { 'g-catan-big': catanBigBox });
+  assert.equal(fitAuto.canFit, true);
+  assert.equal(fitAuto.protrudesDepthCm, 4.5);
+
+  // Also works in horizontal orientation with rotation90 = 90 (31.5 width, 9.5 height, 43.5 shelfDepth)
+  const fitHoriz = canGameFitInCube(cubeW, cubeH, cubeD, [], catanBigBox, { 'g-catan-big': catanBigBox }, 'horizontal');
+  assert.equal(fitHoriz.canFit, true);
+  assert.equal(fitHoriz.suggestedRotation, 90);
+  assert.equal(fitHoriz.protrudesDepthCm, 4.5);
+
+  // checkPlacementAnomalies must NOT block Fatto for depth protrusion alone
+  const placed: PlacedBox = {
+    id: 'p-catan-big',
+    gameId: 'g-catan-big',
+    cubeRow: 0,
+    cubeCol: 0,
+    orientation: fitAuto.suggestedOrientation!,
+    rotation90: fitAuto.suggestedRotation!,
+    order: 0,
+  };
+  const space = calculateCubeSpace(cubeW, cubeH, cubeD, [placed], { 'g-catan-big': catanBigBox });
+  assert.equal(space.isDepthOverflow, true);
+  assert.equal(space.isOverflowing, false);
+
+  const anomalies = checkPlacementAnomalies(cubeW, cubeH, cubeD, [placed], { 'g-catan-big': catanBigBox });
+  assert.equal(anomalies.hasAnomalies, false);
+});
+
+test('canGameFitInCube prefers non-protruding pose when available and rejects boxes exceeding both width and height dividers', () => {
+  const cubeW = 33.5;
+  const cubeH = 33.5;
+  const cubeD = 39.0;
+
+  // Scythe (36.5 x 30.0 x 9.9 cm) fits completely inside 39 cm depth at vertical 0° (36.5 <= 39)
+  const scythe: GameBox = { id: 'g-scythe', name: 'Scythe', width: 36.5, height: 30.0, depth: 9.9 };
+  const fitScythe = canGameFitInCube(cubeW, cubeH, cubeD, [], scythe, { 'g-scythe': scythe });
+  assert.equal(fitScythe.canFit, true);
+  assert.equal(fitScythe.protrudesDepthCm, undefined);
+
+  // Box whose two smallest dimensions (40 x 38) cannot fit 33.5 x 33.5 wooden dividers must still be rejected
+  const tooWideAndTall: GameBox = { id: 'g-wide-tall', name: 'Oversized Trunk', width: 42.0, height: 40.0, depth: 38.0 };
+  const fitWideTall = canGameFitInCube(cubeW, cubeH, cubeD, [], tooWideAndTall, { 'g-wide-tall': tooWideAndTall });
+  assert.equal(fitWideTall.canFit, false);
+});
+
+
 
 
 

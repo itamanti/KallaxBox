@@ -676,7 +676,10 @@ export default function App() {
 
     setToast({
       type: 'success',
-      message: `"${game.name}" posizionato con successo nel vano [${row + 1},${col + 1}].`,
+      message:
+        fit.protrudesDepthCm && fit.protrudesDepthCm > 0
+          ? `"${game.name}" posizionato nel vano [${row + 1},${col + 1}] (sporge di ${fit.protrudesDepthCm} cm in profondità).`
+          : `"${game.name}" posizionato con successo nel vano [${row + 1},${col + 1}].`,
     });
   };
 
@@ -752,7 +755,10 @@ export default function App() {
 
     setToast({
       type: 'success',
-      message: `"${game.name}" spostato con successo nel vano [${targetRow + 1},${targetCol + 1}].`,
+      message:
+        fit.protrudesDepthCm && fit.protrudesDepthCm > 0
+          ? `"${game.name}" spostato nel vano [${targetRow + 1},${targetCol + 1}] (sporge di ${fit.protrudesDepthCm} cm in profondità).`
+          : `"${game.name}" spostato con successo nel vano [${targetRow + 1},${targetCol + 1}].`,
     });
   };
 

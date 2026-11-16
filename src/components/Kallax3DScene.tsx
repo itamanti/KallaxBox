@@ -491,8 +491,9 @@ export const Kallax3DScene: React.FC<Kallax3DSceneProps> = ({
       // Box center coordinates
       const boxX = cubeOriginX + (placed.posX ?? 0) + eff.displayWidth / 2;
       const boxY = cubeOriginY + (placed.posY ?? 0) + eff.displayHeight / 2;
-      // Position flush with front edge of shelf (slight 1.5 cm set-back)
-      const boxZ = totalD / 2 - 1.5 - eff.shelfDepth / 2;
+      // Position flush with front edge of shelf (slight 1.5 cm set-back),
+      // or flush with back edge when deeper than totalD so excess protrudes forward (+Z)
+      const boxZ = Math.max(totalD / 2 - 1.5 - eff.shelfDepth / 2, -totalD / 2 + eff.shelfDepth / 2);
 
       // Color & Textures for 6 faces
       const baseColorHex = game.color || '#3b82f6';

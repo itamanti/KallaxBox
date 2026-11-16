@@ -889,6 +889,11 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
           {space.dominantLayout === 'horizontal' && (
             <span className="text-slate-400">· pila</span>
           )}
+          {space.isDepthOverflow && !space.isOverflowing && (
+            <span className="text-amber-300 font-semibold">
+              · sporge +{Math.round((space.maxDepthUsed - config.cubeDepth) * 10) / 10}cm
+            </span>
+          )}
         </div>
       </div>
     </div>

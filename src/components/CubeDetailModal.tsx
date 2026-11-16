@@ -853,7 +853,10 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                 setAddGameSearch('');
                 setModalAlert({
                   type: 'success',
-                  message: `"${gameObj.name}" inserito nel vano con successo!`,
+                  message:
+                    check.protrudesDepthCm && check.protrudesDepthCm > 0
+                      ? `"${gameObj.name}" inserito nel vano (sporge di ${check.protrudesDepthCm} cm in profondità).`
+                      : `"${gameObj.name}" inserito nel vano con successo!`,
                 });
               } else {
                 setModalAlert({
@@ -919,7 +922,7 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                       const fit = canGameFitInCube(config.cubeWidth, config.cubeHeight, config.cubeDepth, placedBoxes, g, gamesMap, targetOri);
                       return (
                         <option key={g.id} value={g.id}>
-                          {g.name} ({g.width}×{g.height}×{g.depth} cm - da {g.dimensionSource || (g.bggId ? 'BGG' : 'Catalogo')}){!fit.canFit ? ' [NON ENTRA: supera vano]' : ' [Entra]'}
+                          {g.name} ({g.width}×{g.height}×{g.depth} cm - da {g.dimensionSource || (g.bggId ? 'BGG' : 'Catalogo')}){!fit.canFit ? ' [NON ENTRA: supera vano]' : fit.protrudesDepthCm ? ` [Entra · sporge +${fit.protrudesDepthCm} cm prof.]` : ' [Entra]'}
                         </option>
                       );
                     })}
@@ -998,12 +1001,18 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                               <div className="flex items-center gap-2 shrink-0">
                                 <span
                                   className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                                    fit.canFit
-                                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                                      : 'bg-red-950 text-red-300 border border-red-900'
+                                    !fit.canFit
+                                      ? 'bg-red-950 text-red-300 border border-red-900'
+                                      : fit.protrudesDepthCm
+                                      ? 'bg-amber-950 text-amber-300 border border-amber-700'
+                                      : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
                                   }`}
                                 >
-                                  {fit.canFit ? 'Entra' : 'Supera vano'}
+                                  {!fit.canFit
+                                    ? 'Supera vano'
+                                    : fit.protrudesDepthCm
+                                    ? `Sporge +${fit.protrudesDepthCm} cm`
+                                    : 'Entra'}
                                 </span>
                                 <button
                                   type="button"
@@ -1331,6 +1340,8 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                                       ? `Vano attuale [${r + 1},${c + 1}] — "${game.name}" si trova già qui`
                                       : !fit.canFit
                                       ? `Non entra: ${fit.reason}`
+                                      : fit.protrudesDepthCm
+                                      ? `Sposta nel vano [${r + 1},${c + 1}] (sporge +${fit.protrudesDepthCm} cm in profondità)`
                                       : `Sposta nel vano [${r + 1},${c + 1}]`
                                   }
                                   onClick={() => {
@@ -1393,6 +1404,11 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                 <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span className="text-[11px]">
                   Disposizione valida · {placedBoxes.length} {placedBoxes.length === 1 ? 'scatola presente' : 'scatole presenti'}
+                  {space.isDepthOverflow && (
+                    <span className="text-amber-300 font-semibold">
+                      {' '}· sporge +{Math.round((space.maxDepthUsed - config.cubeDepth) * 10) / 10} cm in profondità
+                    </span>
+                  )}
                 </span>
               </div>
             )}

@@ -668,13 +668,6 @@ export const validateAndPackCubeBoxes = (
     const top = (p.posY ?? 0) + eff.displayHeight;
     if (right > maxPackedX) maxPackedX = right;
     if (top > maxPackedY) maxPackedY = top;
-
-    if (eff.shelfDepth > shelfDepth + 0.1) {
-      return {
-        isValid: false,
-        errorMessage: `La scatola "${g.name}" supera la profondità del vano (${eff.shelfDepth} cm su ${shelfDepth} cm max).`,
-      };
-    }
   }
 
   // Check if width is exceeded (33.5 cm)

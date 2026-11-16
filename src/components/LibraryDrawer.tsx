@@ -478,6 +478,8 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({
                           ? `Vano attuale [${r + 1},${c + 1}] — "${touchTargetGame.name}" si trova già qui`
                           : !fit.canFit
                           ? fit.reason
+                          : fit.protrudesDepthCm
+                          ? `Inserisci nel vano [${r + 1},${c + 1}] (sporge +${fit.protrudesDepthCm} cm in profondità)`
                           : `Inserisci nel vano [${r + 1},${c + 1}]`
                       }
                       onClick={() => {
@@ -497,6 +499,10 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({
                         <span className="text-[9px] text-emerald-400 font-sans font-semibold">Attuale</span>
                       ) : !fit.canFit ? (
                         <span className="text-[9px] text-red-400 font-sans font-normal">Non entra</span>
+                      ) : fit.protrudesDepthCm ? (
+                        <span className="text-[9px] text-amber-300 font-sans font-semibold">
+                          +{fit.protrudesDepthCm}cm prof.
+                        </span>
                       ) : (
                         <span className="text-[9px] text-slate-500 font-sans font-normal">
                           {cubeBoxes.length > 0 ? `${cubeBoxes.length} g.` : 'Libero'}

@@ -296,3 +296,35 @@ test('validateAndPackCubeBoxes returns error when height is exceeded on lock', (
   assert.ok(validation.errorMessage?.includes('Altezza superata'));
 });
 
+test('validateAndPackCubeBoxes allows boxes that protrude in shelf depth without width/height overflow', () => {
+  const shelf: ShelfBounds = { width: 33.5, height: 33.5 };
+  const catanBigBox: GameBox = {
+    id: 'g-catan-big',
+    name: 'Catan Big Box',
+    width: 43.5,
+    height: 31.5,
+    depth: 9.5,
+  };
+  const gamesMap = { 'g-catan-big': catanBigBox };
+
+  const placed: PlacedBox[] = [
+    {
+      id: 'p-catan-big',
+      gameId: 'g-catan-big',
+      cubeRow: 0,
+      cubeCol: 0,
+      orientation: 'vertical',
+      rotation90: 0,
+      order: 0,
+      posX: 4,
+      posY: 0,
+    },
+  ];
+
+  const validation = validateAndPackCubeBoxes(placed, gamesMap, shelf);
+  assert.equal(validation.isValid, true);
+  assert.ok(validation.packedBoxes);
+  assert.equal(validation.packedBoxes[0].posX, 0);
+});
+
+

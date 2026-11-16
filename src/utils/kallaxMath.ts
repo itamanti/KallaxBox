@@ -242,8 +242,9 @@ export function calculateCubeSpace(
   const isWidthOverflow = totalWidthUsed > cubeWidth + 0.1;
   const isHeightOverflow = totalHeightUsed > cubeHeight + 0.1;
   const isDepthOverflow = maxDepthUsed > cubeDepth + 0.1;
-  const isVolumeOverflow = totalVolumeUsedCm3 > totalVolumeCm3;
-  const isOverflowing = isWidthOverflow || isHeightOverflow || isDepthOverflow || isVolumeOverflow;
+  // Kallax cubes are open front/back: depth protrusion is tracked via isDepthOverflow
+  // without blocking insertion or flagging hard overflow (only width/height dividers are hard walls).
+  const isOverflowing = isWidthOverflow || isHeightOverflow;
 
   const usedVolumeLiters = Math.round((totalVolumeUsedCm3 / 1000) * 10) / 10;
   const remainingVolumeLiters = Math.max(0, Math.round(((totalVolumeCm3 - totalVolumeUsedCm3) / 1000) * 10) / 10);
@@ -335,15 +336,9 @@ export function checkPlacementAnomalies(
         reason: `"${game.name}" supera l'altezza del vano (${eff.displayHeight} cm > ${cubeHeight} cm).`,
       };
     }
-    if (eff.shelfDepth > cubeDepth + 0.1) {
-      return {
-        hasAnomalies: true,
-        reason: `"${game.name}" sporge oltre la profondità del vano (${eff.shelfDepth} cm > ${cubeDepth} cm).`,
-      };
-    }
   }
 
-  // 2. Check cumulative space analysis (width, height, depth, volume)
+  // 2. Check cumulative space analysis (width, height)
   const space = calculateCubeSpace(cubeWidth, cubeHeight, cubeDepth, placedBoxes, gamesMap);
   if (space.isWidthOverflow) {
     return {
@@ -355,12 +350,6 @@ export function checkPlacementAnomalies(
     return {
       hasAnomalies: true,
       reason: `Altezza superata: ${space.totalHeightUsed} cm usati su ${cubeHeight} cm max.`,
-    };
-  }
-  if (space.isDepthOverflow) {
-    return {
-      hasAnomalies: true,
-      reason: `Profondità superata: ${space.maxDepthUsed} cm su ${cubeDepth} cm max.`,
     };
   }
   if (space.isOverflowing) {
@@ -439,11 +428,26 @@ export function autoOptimizeCubeLayout(
     let chosenRot = 0;
     let chosenEff = eff0;
 
-    // Pick whichever fits within cubeHeight and cubeDepth
-    if (eff0.displayHeight <= cubeHeight && eff0.shelfDepth <= cubeDepth) {
+    // Prefer rotation that fits within both cubeHeight and cubeDepth;
+    // if depth protrudes, fall back to the rotation that fits cubeHeight with minimal depth protrusion.
+    if (eff0.displayHeight <= cubeHeight + 0.1 && eff0.shelfDepth <= cubeDepth + 0.1) {
       chosenRot = 0;
       chosenEff = eff0;
-    } else if (eff90.displayHeight <= cubeHeight && eff90.shelfDepth <= cubeDepth) {
+    } else if (eff90.displayHeight <= cubeHeight + 0.1 && eff90.shelfDepth <= cubeDepth + 0.1) {
+      chosenRot = 90;
+      chosenEff = eff90;
+    } else if (eff0.displayHeight <= cubeHeight + 0.1 && eff90.displayHeight <= cubeHeight + 0.1) {
+      if (eff0.shelfDepth <= eff90.shelfDepth) {
+        chosenRot = 0;
+        chosenEff = eff0;
+      } else {
+        chosenRot = 90;
+        chosenEff = eff90;
+      }
+    } else if (eff0.displayHeight <= cubeHeight + 0.1) {
+      chosenRot = 0;
+      chosenEff = eff0;
+    } else if (eff90.displayHeight <= cubeHeight + 0.1) {
       chosenRot = 90;
       chosenEff = eff90;
     } else {
@@ -454,7 +458,7 @@ export function autoOptimizeCubeLayout(
     vertConfigs.push({ orientation: 'vertical', rotation90: chosenRot });
   }
 
-  if (vertWidth > cubeWidth) {
+  if (vertWidth > cubeWidth + 0.1) {
     verticalFits = false;
   }
 
@@ -470,10 +474,24 @@ export function autoOptimizeCubeLayout(
     let chosenRot = 0;
     let chosenEff = eff0;
 
-    if (eff0.displayWidth <= cubeWidth && eff0.shelfDepth <= cubeDepth) {
+    if (eff0.displayWidth <= cubeWidth + 0.1 && eff0.shelfDepth <= cubeDepth + 0.1) {
       chosenRot = 0;
       chosenEff = eff0;
-    } else if (eff90.displayWidth <= cubeWidth && eff90.shelfDepth <= cubeDepth) {
+    } else if (eff90.displayWidth <= cubeWidth + 0.1 && eff90.shelfDepth <= cubeDepth + 0.1) {
+      chosenRot = 90;
+      chosenEff = eff90;
+    } else if (eff0.displayWidth <= cubeWidth + 0.1 && eff90.displayWidth <= cubeWidth + 0.1) {
+      if (eff0.shelfDepth <= eff90.shelfDepth) {
+        chosenRot = 0;
+        chosenEff = eff0;
+      } else {
+        chosenRot = 90;
+        chosenEff = eff90;
+      }
+    } else if (eff0.displayWidth <= cubeWidth + 0.1) {
+      chosenRot = 0;
+      chosenEff = eff0;
+    } else if (eff90.displayWidth <= cubeWidth + 0.1) {
       chosenRot = 90;
       chosenEff = eff90;
     } else {
@@ -484,7 +502,7 @@ export function autoOptimizeCubeLayout(
     horizConfigs.push({ orientation: 'horizontal', rotation90: chosenRot });
   }
 
-  if (horizHeight > cubeHeight) {
+  if (horizHeight > cubeHeight + 0.1) {
     horizontalFits = false;
   }
 
@@ -1804,40 +1822,52 @@ export function canGameFitInCube(
   targetRotation?: number,
   strictOrientation: boolean = false
 ): FitCheckResult {
-  // Check if box itself exceeds the cube in all possible 3D orientations
+  // Check if even the two smallest box dimensions exceed the cube opening (width x height);
+  // depth protrusion out the front/back of an open Kallax cube is allowed.
   const dims = [newGame.width, newGame.height, newGame.depth].sort((a, b) => a - b);
-  const cubeDims = [cubeWidth, cubeHeight, cubeDepth].sort((a, b) => a - b);
-  if (dims[0] > cubeDims[0] + 0.1 || dims[1] > cubeDims[1] + 0.1 || dims[2] > cubeDims[2] + 0.1) {
+  const openDims = [cubeWidth, cubeHeight].sort((a, b) => a - b);
+  if (dims[0] > openDims[0] + 0.1 || dims[1] > openDims[1] + 0.1) {
     return {
       canFit: false,
-      reason: `La scatola di "${newGame.name}" (${newGame.width} × ${newGame.height} × ${newGame.depth} cm) supera le dimensioni massime fisiche del vano (${cubeWidth} × ${cubeHeight} × ${cubeDepth} cm).`,
+      reason: `La scatola di "${newGame.name}" (${newGame.width} × ${newGame.height} × ${newGame.depth} cm) supera larghezza/altezza interna del vano (${cubeWidth} × ${cubeHeight} cm).`,
     };
   }
+
+  const getProtrusion = (shelfDepth: number): number | undefined =>
+    shelfDepth > cubeDepth + 0.1
+      ? Math.round((shelfDepth - cubeDepth) * 10) / 10
+      : undefined;
 
   // 1. If preferred target orientation was provided (e.g. moving a box in costa):
   if (targetOrientation !== undefined) {
     const candidateRots = [targetRotation ?? 0, 90, 180, 270];
-    for (const testRot of candidateRots) {
-      const candidatePlaced: PlacedBox[] = [
-        ...currentPlaced,
-        {
-          id: 'test-new-box',
-          gameId: newGame.id,
-          cubeRow: 0,
-          cubeCol: 0,
-          orientation: targetOrientation,
-          rotation90: testRot,
-          order: currentPlaced.length,
-        },
-      ];
-      const testMap = { ...gamesMap, [newGame.id]: newGame };
-      const space = calculateCubeSpace(cubeWidth, cubeHeight, cubeDepth, candidatePlaced, testMap);
-      if (!space.isOverflowing) {
-        return {
-          canFit: true,
-          suggestedOrientation: targetOrientation,
-          suggestedRotation: testRot,
-        };
+    // Prefer non-protruding pose first, then allow depth protrusion
+    for (const allowDepthProtrusion of [false, true]) {
+      for (const testRot of candidateRots) {
+        const eff = getEffectiveDimensions(newGame, targetOrientation, testRot);
+        if (!allowDepthProtrusion && eff.shelfDepth > cubeDepth + 0.1) continue;
+        const candidatePlaced: PlacedBox[] = [
+          ...currentPlaced,
+          {
+            id: 'test-new-box',
+            gameId: newGame.id,
+            cubeRow: 0,
+            cubeCol: 0,
+            orientation: targetOrientation,
+            rotation90: testRot,
+            order: currentPlaced.length,
+          },
+        ];
+        const testMap = { ...gamesMap, [newGame.id]: newGame };
+        const space = calculateCubeSpace(cubeWidth, cubeHeight, cubeDepth, candidatePlaced, testMap);
+        if (!space.isOverflowing) {
+          return {
+            canFit: true,
+            suggestedOrientation: targetOrientation,
+            suggestedRotation: testRot,
+            protrudesDepthCm: getProtrusion(space.maxDepthUsed),
+          };
+        }
       }
     }
 
@@ -1863,8 +1893,6 @@ export function canGameFitInCube(
         reason = `Larghezza superata (${space.totalWidthUsed} cm > ${cubeWidth} cm): le scatole non possono sovrapporsi.`;
       } else if (space.isHeightOverflow) {
         reason = `Altezza superata (${space.totalHeightUsed} cm > ${cubeHeight} cm): supera l'altezza del vano.`;
-      } else if (space.isDepthOverflow) {
-        reason = `Profondità scatola (${space.maxDepthUsed} cm) sporge oltre il vano (${cubeDepth} cm).`;
       }
       return {
         canFit: false,
@@ -1875,6 +1903,7 @@ export function canGameFitInCube(
 
   // If the cube is empty:
   if (currentPlaced.length === 0) {
+    // Pass 1: Prefer poses that fit inside depth as well
     for (const orient of ['vertical', 'horizontal', 'frontal'] as ShelfOrientation[]) {
       for (const rot of [0, 90]) {
         const eff = getEffectiveDimensions(newGame, orient, rot);
@@ -1891,6 +1920,30 @@ export function canGameFitInCube(
         }
       }
     }
+    // Pass 2: Allow poses that protrude in depth (pick smallest depth protrusion)
+    let bestProtruding: FitCheckResult | null = null;
+    let bestDepth = Infinity;
+    for (const orient of ['vertical', 'horizontal', 'frontal'] as ShelfOrientation[]) {
+      for (const rot of [0, 90]) {
+        const eff = getEffectiveDimensions(newGame, orient, rot);
+        if (
+          eff.displayWidth <= cubeWidth + 0.1 &&
+          eff.displayHeight <= cubeHeight + 0.1 &&
+          eff.shelfDepth < bestDepth
+        ) {
+          bestDepth = eff.shelfDepth;
+          bestProtruding = {
+            canFit: true,
+            suggestedOrientation: orient,
+            suggestedRotation: rot,
+            protrudesDepthCm: getProtrusion(eff.shelfDepth),
+          };
+        }
+      }
+    }
+    if (bestProtruding) {
+      return bestProtruding;
+    }
   }
 
   // Cube has existing boxes
@@ -1898,87 +1951,103 @@ export function canGameFitInCube(
 
   // If dominant layout is vertical:
   if (currentSpace.dominantLayout === 'vertical') {
-    for (const rot of [0, 90]) {
-      const eff = getEffectiveDimensions(newGame, 'vertical', rot);
-      if (
-        currentSpace.totalWidthUsed + eff.displayWidth <= cubeWidth + 0.1 &&
-        eff.displayHeight <= cubeHeight + 0.1 &&
-        eff.shelfDepth <= cubeDepth + 0.1
-      ) {
-        return {
-          canFit: true,
-          suggestedOrientation: 'vertical',
-          suggestedRotation: rot,
-        };
+    for (const allowDepthProtrusion of [false, true]) {
+      for (const rot of [0, 90]) {
+        const eff = getEffectiveDimensions(newGame, 'vertical', rot);
+        if (!allowDepthProtrusion && eff.shelfDepth > cubeDepth + 0.1) continue;
+        if (
+          currentSpace.totalWidthUsed + eff.displayWidth <= cubeWidth + 0.1 &&
+          eff.displayHeight <= cubeHeight + 0.1
+        ) {
+          return {
+            canFit: true,
+            suggestedOrientation: 'vertical',
+            suggestedRotation: rot,
+            protrudesDepthCm: getProtrusion(Math.max(currentSpace.maxDepthUsed, eff.shelfDepth)),
+          };
+        }
       }
     }
   }
 
   // If dominant layout is horizontal:
   if (currentSpace.dominantLayout === 'horizontal') {
-    for (const rot of [0, 90]) {
-      const eff = getEffectiveDimensions(newGame, 'horizontal', rot);
-      if (
-        currentSpace.totalHeightUsed + eff.displayHeight <= cubeHeight + 0.1 &&
-        eff.displayWidth <= cubeWidth + 0.1 &&
-        eff.shelfDepth <= cubeDepth + 0.1
-      ) {
-        return {
-          canFit: true,
-          suggestedOrientation: 'horizontal',
-          suggestedRotation: rot,
-        };
+    for (const allowDepthProtrusion of [false, true]) {
+      for (const rot of [0, 90]) {
+        const eff = getEffectiveDimensions(newGame, 'horizontal', rot);
+        if (!allowDepthProtrusion && eff.shelfDepth > cubeDepth + 0.1) continue;
+        if (
+          currentSpace.totalHeightUsed + eff.displayHeight <= cubeHeight + 0.1 &&
+          eff.displayWidth <= cubeWidth + 0.1
+        ) {
+          return {
+            canFit: true,
+            suggestedOrientation: 'horizontal',
+            suggestedRotation: rot,
+            protrudesDepthCm: getProtrusion(Math.max(currentSpace.maxDepthUsed, eff.shelfDepth)),
+          };
+        }
       }
     }
   }
 
   // Also test if newGame can be placed in horizontal orientation stacked with existing boxes:
-  for (const rot of [0, 90]) {
-    const candidatePlaced: PlacedBox[] = [
-      ...currentPlaced,
-      {
-        id: 'test-new-box',
-        gameId: newGame.id,
-        cubeRow: 0,
-        cubeCol: 0,
-        orientation: 'horizontal',
-        rotation90: rot,
-        order: currentPlaced.length,
-      },
-    ];
-    const testMap = { ...gamesMap, [newGame.id]: newGame };
-    const space = calculateCubeSpace(cubeWidth, cubeHeight, cubeDepth, candidatePlaced, testMap);
-    if (!space.isOverflowing) {
-      return {
-        canFit: true,
-        suggestedOrientation: 'horizontal',
-        suggestedRotation: rot,
-      };
+  for (const allowDepthProtrusion of [false, true]) {
+    for (const rot of [0, 90]) {
+      const eff = getEffectiveDimensions(newGame, 'horizontal', rot);
+      if (!allowDepthProtrusion && eff.shelfDepth > cubeDepth + 0.1) continue;
+      const candidatePlaced: PlacedBox[] = [
+        ...currentPlaced,
+        {
+          id: 'test-new-box',
+          gameId: newGame.id,
+          cubeRow: 0,
+          cubeCol: 0,
+          orientation: 'horizontal',
+          rotation90: rot,
+          order: currentPlaced.length,
+        },
+      ];
+      const testMap = { ...gamesMap, [newGame.id]: newGame };
+      const space = calculateCubeSpace(cubeWidth, cubeHeight, cubeDepth, candidatePlaced, testMap);
+      if (!space.isOverflowing) {
+        return {
+          canFit: true,
+          suggestedOrientation: 'horizontal',
+          suggestedRotation: rot,
+          protrudesDepthCm: getProtrusion(space.maxDepthUsed),
+        };
+      }
     }
   }
 
   // Also test if newGame can fit in frontal orientation (showcase mode):
-  for (const rot of [0, 90, 180, 270]) {
-    const candidatePlaced: PlacedBox[] = [
-      ...currentPlaced,
-      {
-        id: 'test-new-box',
-        gameId: newGame.id,
-        cubeRow: 0,
-        cubeCol: 0,
-        orientation: 'frontal',
-        rotation90: rot,
-        order: currentPlaced.length,
-      },
-    ];
-    const testMap = { ...gamesMap, [newGame.id]: newGame };
-    const space = calculateCubeSpace(cubeWidth, cubeHeight, cubeDepth, candidatePlaced, testMap);
-    if (!space.isOverflowing) {
-      return {
-        canFit: true,
-        suggestedOrientation: 'frontal',
-        suggestedRotation: rot,
-      };
+  for (const allowDepthProtrusion of [false, true]) {
+    for (const rot of [0, 90, 180, 270]) {
+      const eff = getEffectiveDimensions(newGame, 'frontal', rot);
+      if (!allowDepthProtrusion && eff.shelfDepth > cubeDepth + 0.1) continue;
+      const candidatePlaced: PlacedBox[] = [
+        ...currentPlaced,
+        {
+          id: 'test-new-box',
+          gameId: newGame.id,
+          cubeRow: 0,
+          cubeCol: 0,
+          orientation: 'frontal',
+          rotation90: rot,
+          order: currentPlaced.length,
+        },
+      ];
+      const testMap = { ...gamesMap, [newGame.id]: newGame };
+      const space = calculateCubeSpace(cubeWidth, cubeHeight, cubeDepth, candidatePlaced, testMap);
+      if (!space.isOverflowing) {
+        return {
+          canFit: true,
+          suggestedOrientation: 'frontal',
+          suggestedRotation: rot,
+          protrudesDepthCm: getProtrusion(space.maxDepthUsed),
+        };
+      }
     }
   }
 
@@ -2005,6 +2074,7 @@ export function canGameFitInCube(
       canFit: true,
       suggestedOrientation: lastConfig?.orientation ?? 'vertical',
       suggestedRotation: lastConfig?.rotation90 ?? 0,
+      protrudesDepthCm: getProtrusion(testSpace.maxDepthUsed),
     };
   }
 
@@ -2022,8 +2092,6 @@ export function canGameFitInCube(
     reason = `Larghezza totale (${testSpace.totalWidthUsed} cm) superiore al limite del vano (${cubeWidth} cm): le scatole non possono sovrapporsi.`;
   } else if (testSpace.isHeightOverflow) {
     reason = `Altezza totale (${testSpace.totalHeightUsed} cm) superiore al limite del vano (${cubeHeight} cm).`;
-  } else if (testSpace.isDepthOverflow) {
-    reason = `Profondità scatola (${testSpace.maxDepthUsed} cm) sporge oltre i ${cubeDepth} cm del vano.`;
   }
 
   return {
@@ -2052,7 +2120,6 @@ export function canRotateBoxInCube(
     let reason = 'La rotazione farebbe superare le dimensioni del vano.';
     if (space.isHeightOverflow) reason = `Altezza superata (${space.totalHeightUsed} cm > ${cubeHeight} cm).`;
     else if (space.isWidthOverflow) reason = `Larghezza superata (${space.totalWidthUsed} cm > ${cubeWidth} cm).`;
-    else if (space.isDepthOverflow) reason = `Profondità superata (${space.maxDepthUsed} cm > ${cubeDepth} cm).`;
     return { canRotate: false, reason };
   }
   return { canRotate: true };
@@ -2096,7 +2163,6 @@ export function canChangeOrientationInCube(
     } else {
       if (space.isWidthOverflow) bestFailReason = `Larghezza superata (${space.totalWidthUsed} cm > ${cubeWidth} cm).`;
       else if (space.isHeightOverflow) bestFailReason = `Altezza superata (${space.totalHeightUsed} cm > ${cubeHeight} cm).`;
-      else if (space.isDepthOverflow) bestFailReason = `Profondità superata (${space.maxDepthUsed} cm > ${cubeDepth} cm).`;
     }
   }
 
