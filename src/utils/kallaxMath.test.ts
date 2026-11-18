@@ -898,6 +898,72 @@ test('canGameFitInCube prefers non-protruding pose when available and rejects bo
   assert.equal(fitWideTall.canFit, false);
 });
 
+test('canGameFitInCube detects 2D free space above shorter vertical boxes and auto-adapts to horizontal', () => {
+  const cubeW = 33.5;
+  const cubeH = 33.5;
+  const cubeD = 39.0;
+
+  // Scenario matching Vano 1,1 in screenshot:
+  // 4 shorter vertical boxes (~21-25 cm tall) + 1 tall vertical box (31.5 cm tall) using 31.5 cm width
+  const spellbook: GameBox = { id: 'g-sb', name: 'SpellBook', width: 22.0, height: 22.0, depth: 5.5 };
+  const setMatch: GameBox = { id: 'g-sm', name: 'Set & Match', width: 25.0, height: 25.0, depth: 5.5 };
+  const wheels: GameBox = { id: 'g-wd', name: 'Wheels vs Doors', width: 23.0, height: 23.0, depth: 5.5 };
+  const sugi: GameBox = { id: 'g-su', name: 'Sugi', width: 22.0, height: 22.0, depth: 5.5 };
+  const catanBig: GameBox = { id: 'g-cb', name: 'Catan Big Box', width: 31.5, height: 31.5, depth: 9.5 };
+
+  const upperGame: GameBox = { id: 'g-scout', name: 'Air Land & Sea', width: 18.0, height: 14.0, depth: 5.0 };
+  const tooTallForUpper: GameBox = { id: 'g-tall', name: 'Tall Box', width: 28.0, height: 28.0, depth: 10.0 };
+
+  const gamesMap: Record<string, GameBox> = {
+    'g-sb': spellbook,
+    'g-sm': setMatch,
+    'g-wd': wheels,
+    'g-su': sugi,
+    'g-cb': catanBig,
+    'g-scout': upperGame,
+    'g-tall': tooTallForUpper,
+  };
+
+  const placedFloor: PlacedBox[] = [
+    { id: 'p-sb', gameId: 'g-sb', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 0, posX: 0, posY: 0 },
+    { id: 'p-sm', gameId: 'g-sm', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 1, posX: 5.5, posY: 0 },
+    { id: 'p-wd', gameId: 'g-wd', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 2, posX: 11.0, posY: 0 },
+    { id: 'p-su', gameId: 'g-su', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 3, posX: 16.5, posY: 0 },
+    { id: 'p-cb', gameId: 'g-cb', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 4, posX: 22.0, posY: 0 },
+  ];
+
+  // Auto-fit from library (targetOrientation undefined): floor only has 2.0 cm left,
+  // but horizontal (18 x 5 cm) fits right above the shorter 22-25 cm boxes (25 + 5 = 30 <= 33.5 cm)!
+  const fitFromLib = canGameFitInCube(cubeW, cubeH, cubeD, placedFloor, upperGame, gamesMap);
+  assert.equal(fitFromLib.canFit, true);
+  assert.equal(fitFromLib.suggestedOrientation, 'horizontal');
+  assert.ok((fitFromLib.suggestedPosY ?? 0) >= 22.0);
+  assert.ok((fitFromLib.suggestedPosX ?? 0) + 18.0 <= 22.1);
+
+  // Adding it at the suggested coordinates must NOT mark the cube as overflowing
+  const combined: PlacedBox[] = [
+    ...placedFloor,
+    {
+      id: 'p-scout',
+      gameId: 'g-scout',
+      cubeRow: 0,
+      cubeCol: 0,
+      orientation: fitFromLib.suggestedOrientation!,
+      rotation90: fitFromLib.suggestedRotation!,
+      order: 5,
+      posX: fitFromLib.suggestedPosX,
+      posY: fitFromLib.suggestedPosY,
+    },
+  ];
+  const space = calculateCubeSpace(cubeW, cubeH, cubeD, combined, gamesMap);
+  assert.equal(space.isOverflowing, false);
+
+  // Oversized box (10 cm thick) does NOT fit above 25 cm boxes (25 + 10 = 35 > 33.5) and is rejected
+  const fitTooTall = canGameFitInCube(cubeW, cubeH, cubeD, placedFloor, tooTallForUpper, gamesMap);
+  assert.equal(fitTooTall.canFit, false);
+});
+
+
 
 
 

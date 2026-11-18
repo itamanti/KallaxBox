@@ -368,10 +368,13 @@ export const syncCubePlacedBoxesPositions = (
 ): PlacedBox[] => {
   if (cubeBoxes.length === 0) return [];
 
-  const horizBoxes = cubeBoxes.filter((p) => p.orientation === 'horizontal');
-  const sortedHoriz = [...horizBoxes].sort((a, b) => a.order - b.order);
+  const defaultHorizBoxes = cubeBoxes.filter(
+    (p) => p.orientation === 'horizontal' && (p.posX === undefined || p.posY === undefined)
+  );
+  const sortedHoriz = [...defaultHorizBoxes].sort((a, b) => a.order - b.order);
   const nonHoriz = cubeBoxes
-    .filter((p) => p.orientation !== 'horizontal')
+    .filter((p) => !(p.orientation === 'horizontal' && (p.posX === undefined || p.posY === undefined)))
+    .filter((p) => p.posX === undefined || p.posY === undefined)
     .sort((a, b) => a.order - b.order);
 
   // 1. Convert to initial Box2D representation
@@ -399,9 +402,9 @@ export const syncCubePlacedBoxesPositions = (
         y = accumulatedY;
       } else {
         let accumulatedX = 0;
-        if (horizBoxes.length > 0) {
+        if (defaultHorizBoxes.length > 0) {
           let maxHW = 0;
-          for (const h of horizBoxes) {
+          for (const h of defaultHorizBoxes) {
             const hg = gamesMap[h.gameId];
             if (hg) {
               const he = getEffectiveDimensions(hg, h.orientation, h.rotation90);
@@ -513,122 +516,122 @@ export const packAndAlignWithoutGaps = (
   }
 
   // Mixed or side-by-side:
-  // Detect if any box is stacked vertically on top of another box.
-  // Two boxes A and B belong to the same vertical stack/column if:
-  // 1. One is noticeably above the other: |a.y - b.y| >= min(a.height, b.height) * 0.4
-  // 2. They overlap significantly horizontally:
-  //    overlapX >= min(a.width, b.width) * 0.35 || overlapX >= 2.5
-  // 3. Their combined height can reasonably fit within shelf: a.height + b.height <= shelf.height + 2.0
-  const n = items.length;
-  const parent = Array.from({ length: n }, (_, i) => i);
-  const find = (i: number): number => {
-    if (parent[i] === i) return i;
-    parent[i] = find(parent[i]);
-    return parent[i];
-  };
-  const union = (i: number, j: number) => {
-    const rootI = find(i);
-    const rootJ = find(j);
-    if (rootI !== rootJ) parent[rootI] = rootJ;
-  };
-
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const itA = items[i];
-      const itB = items[j];
-      const vertDiff = Math.abs(itA.y - itB.y);
-      const minH = Math.min(itA.height, itB.height);
-      const isVertSeparated = vertDiff >= minH * 0.4;
-
-      const overlapX = Math.min(itA.x + itA.width, itB.x + itB.width) - Math.max(itA.x, itB.x);
-      const minW = Math.min(itA.width, itB.width);
-      const isHorizOverlapping = overlapX >= minW * 0.35 || overlapX >= 2.5;
-
-      const fitsInHeight = itA.height + itB.height <= shelf.height + 2.0;
-
-      if (isVertSeparated && isHorizOverlapping && fitsInHeight) {
-        union(i, j);
+  // Identify base (floor-level) boxes vs upper (stacked) boxes resting on top of other boxes.
+  // A box is an upper box if there is another box beneath it (its bottom y is noticeably above floor
+  // and overlaps horizontally with a lower box whose top <= item.y + 1.0).
+  const isUpper = new Array<boolean>(items.length).fill(false);
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.y < 1.5) continue;
+    for (let j = 0; j < items.length; j++) {
+      if (i === j) continue;
+      const below = items[j];
+      if (below.y + below.height <= it.y + 1.0) {
+        const overlapX = Math.min(it.x + it.width, below.x + below.width) - Math.max(it.x, below.x);
+        if (overlapX >= Math.min(it.width, below.width) * 0.25 || overlapX >= 1.5) {
+          isUpper[i] = true;
+          break;
+        }
       }
     }
   }
 
-  // Group items into columns
-  const columnMap = new Map<number, typeof items>();
-  for (let i = 0; i < n; i++) {
-    const root = find(i);
-    if (!columnMap.has(root)) {
-      columnMap.set(root, []);
+  const baseItems = items.filter((_, i) => !isUpper[i]);
+  const upperItems = items.filter((_, i) => isUpper[i]);
+
+  // Sort base items left to right
+  baseItems.sort((a, b) => {
+    if (Math.abs(a.centerX - b.centerX) > 0.8) {
+      return a.centerX - b.centerX;
     }
-    columnMap.get(root)!.push(items[i]);
-  }
-
-  // Inside each column, sort items from bottom to top (ascending Y)
-  const columns = Array.from(columnMap.values()).map((colItems) => {
-    const sortedCol = [...colItems].sort((a, b) => {
-      if (Math.abs(a.centerY - b.centerY) > 0.3) {
-        return a.centerY - b.centerY;
-      }
-      if (Math.abs(a.y - b.y) > 0.3) {
-        return a.y - b.y;
-      }
-      const tA = a.placed.lastMovedAt ?? 0;
-      const tB = b.placed.lastMovedAt ?? 0;
-      if (tA !== tB) return tA - tB;
-      return a.placed.order - b.placed.order;
-    });
-
-    const minX = Math.min(...colItems.map((c) => c.x));
-    const avgCenterX = colItems.reduce((acc, c) => acc + c.centerX, 0) / colItems.length;
-    const maxLastMoved = Math.max(...colItems.map((c) => c.placed.lastMovedAt ?? 0));
-    const minOrder = Math.min(...colItems.map((c) => c.placed.order));
-    const width = Math.max(...colItems.map((c) => c.width));
-
-    return {
-      items: sortedCol,
-      minX,
-      avgCenterX,
-      maxLastMoved,
-      minOrder,
-      width,
-    };
+    if (Math.abs(a.x - b.x) > 0.5) {
+      return a.x - b.x;
+    }
+    if (a.x <= 1.5 && b.x <= 1.5 && (a.placed.lastMovedAt ?? 0) !== (b.placed.lastMovedAt ?? 0)) {
+      return (b.placed.lastMovedAt ?? 0) - (a.placed.lastMovedAt ?? 0);
+    }
+    return a.placed.order - b.placed.order;
   });
 
-  // Sort columns from left to right by their horizontal position
-  columns.sort((colA, colB) => {
-    // If centers are noticeably different, use horizontal center
-    if (Math.abs(colA.avgCenterX - colB.avgCenterX) > 0.8) {
-      return colA.avgCenterX - colB.avgCenterX;
-    }
-    // If centers are very close, compare minX
-    if (Math.abs(colA.minX - colB.minX) > 0.5) {
-      return colA.minX - colB.minX;
-    }
-    // If both are near the left edge (e.g. minX <= 1.5 cm) and virtually identical,
-    // the one moved more recently by the user takes precedence (placed first)
-    if (colA.minX <= 1.5 && colB.minX <= 1.5 && colA.maxLastMoved !== colB.maxLastMoved) {
-      return colB.maxLastMoved - colA.maxLastMoved;
-    }
-    // Fallback: original order
-    return colA.minOrder - colB.minOrder;
-  });
-
-  // Pack columns sequentially flush against each other from left (x = 0) to right
+  // Pack base items flush side-by-side from left (x = 0) on the shelf floor (y = 0)
   let currentX = 0;
   let globalOrder = 0;
   const result: PlacedBox[] = [];
+  const settled2D: Box2D[] = [];
+  const shiftMap = new Map<string, number>();
 
-  for (const col of columns) {
-    let currentY = 0;
-    for (const item of col.items) {
-      result.push({
-        ...item.placed,
-        order: globalOrder++,
-        posX: Math.round(currentX * 10) / 10,
-        posY: Math.round(currentY * 10) / 10,
-      });
-      currentY += item.height;
+  for (const item of baseItems) {
+    const packedX = Math.round(currentX * 10) / 10;
+    shiftMap.set(item.placed.id, packedX - item.x);
+    settled2D.push({
+      id: item.placed.id,
+      x: packedX,
+      y: 0,
+      width: item.width,
+      height: item.height,
+    });
+    result.push({
+      ...item.placed,
+      order: globalOrder++,
+      posX: packedX,
+      posY: 0,
+    });
+    currentX += item.width;
+  }
+
+  // Sort upper items from bottom to top, then left to right
+  upperItems.sort((a, b) => {
+    if (Math.abs(a.y - b.y) > 0.3) return a.y - b.y;
+    if (Math.abs(a.centerX - b.centerX) > 0.5) return a.centerX - b.centerX;
+    return a.placed.order - b.placed.order;
+  });
+
+  // Settle upper items onto supporting boxes underneath without horizontal gaps or vertical tower merges
+  for (const item of upperItems) {
+    // Inherit horizontal shift from the primary supporting box underneath
+    let shiftX = 0;
+    let bestSupportOverlap = 0;
+    for (const orig of items) {
+      if (orig.placed.id === item.placed.id) continue;
+      if (orig.y + orig.height <= item.y + 1.0) {
+        const ov = Math.min(item.x + item.width, orig.x + orig.width) - Math.max(item.x, orig.x);
+        if (ov > bestSupportOverlap) {
+          bestSupportOverlap = ov;
+          shiftX = shiftMap.get(orig.placed.id) ?? 0;
+        }
+      }
     }
-    currentX += col.width;
+
+    const desiredX = clamp(Math.round((item.x + shiftX) * 10) / 10, 0, Math.max(0, shelf.width - item.width));
+    // Find highest supporting surface directly underneath [desiredX, desiredX + width]
+    let supportY = 0;
+    for (const s of settled2D) {
+      const ov = Math.min(desiredX + item.width, s.x + s.width) - Math.max(desiredX, s.x);
+      if (ov > 0.5 && s.y + s.height <= item.y + item.height * 0.5) {
+        supportY = Math.max(supportY, s.y + s.height);
+      }
+    }
+
+    const candidate: Box2D = {
+      id: item.placed.id,
+      x: desiredX,
+      y: Math.round(supportY * 10) / 10,
+      width: item.width,
+      height: item.height,
+    };
+
+    const resolved = hasAnyOverlap(candidate, settled2D)
+      ? resolveCollisionsAndClamp(candidate, settled2D, shelf)
+      : candidate;
+
+    shiftMap.set(item.placed.id, resolved.x - item.x);
+    settled2D.push(resolved);
+    result.push({
+      ...item.placed,
+      order: globalOrder++,
+      posX: resolved.x,
+      posY: resolved.y,
+    });
   }
 
   return result;

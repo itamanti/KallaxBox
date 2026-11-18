@@ -47,7 +47,7 @@ interface ShelfOverviewProps {
   onAutoOptimizeCube?: (row: number, col: number, e?: React.MouseEvent) => void;
   onAutoOptimizeAll?: () => void;
   onDropGame: (gameId: string, row: number, col: number) => void;
-  onMoveBoxToCube?: (placedId: string, targetRow: number, targetCol: number) => void;
+  onMoveBoxToCube?: (placedId: string, targetRow: number, targetCol: number, dropPosX?: number, dropPosY?: number) => void;
   onUpdatePlacement?: (placedId: string, updates: Partial<PlacedBox>) => void;
   onReorderBoxes?: (newBoxes: PlacedBox[]) => void;
   onShowToast?: (type: 'success' | 'warning' | 'error', message: string) => void;
@@ -397,142 +397,163 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
 
       {/* Interactive Quick Transfer Bar when a box is selected */}
       {selectedPlaced && selectedGame && (
-        <div className="p-3 sm:p-3.5 bg-slate-900 border-2 border-amber-500/80 rounded-xl flex flex-wrap items-center justify-between gap-3 shadow-xl animate-in fade-in slide-in-from-top-1">
-          <div className="flex items-center gap-3">
-            <div
-              className="w-9 h-9 rounded-lg flex items-center justify-center font-bold text-white text-xs shrink-0 shadow"
-              style={{ backgroundColor: selectedGame.color || '#3B82F6' }}
-            >
-              <BoxIcon className="w-5 h-5 drop-shadow" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-bold text-white">{selectedGame.name}</span>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold">
-                  Vano attuale: [{selectedPlaced.cubeRow + 1},{selectedPlaced.cubeCol + 1}]
-                </span>
-              </div>
-              <p className="text-xs text-slate-300 mt-0.5 flex items-center gap-1">
-                <ArrowRightLeft className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                <span>Tocca un vano per trasferire, oppure ruota la scatola:</span>
-              </p>
-            </div>
-
-            {/* Quick Rotate & Physical Orientation buttons ("solo icone per ruota e sposta. mentre per l'orientamento fisico mettili tutti") */}
-            <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              {/* Ruota: solo icona e tooltip */}
-              <button
-                onClick={(e) => onRotateBox(selectedPlaced.id, e)}
-                className="p-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 transition-all flex items-center justify-center shadow cursor-pointer active:scale-95"
-                title={`Ruota 90° (${selectedPlaced.rotation90}°)`}
-                aria-label={`Ruota ${selectedGame.name} di 90 gradi`}
+        <div className="p-3 sm:p-3.5 bg-slate-900 border-2 border-amber-500/80 rounded-xl flex flex-col gap-3 shadow-xl animate-in fade-in slide-in-from-top-1 w-full overflow-hidden">
+          {/* Row 1: Box Icon + Full-Width Horizontal Game Name + Close Button */}
+          <div className="flex items-start justify-between gap-2.5">
+            <div className="flex items-start gap-2.5 min-w-0 flex-1">
+              <div
+                className="w-9 h-9 rounded-lg flex items-center justify-center font-bold text-white text-xs shrink-0 shadow mt-0.5"
+                style={{ backgroundColor: selectedGame.color || '#3B82F6' }}
               >
-                <RotateCw className="w-4 h-4" />
-              </button>
-
-              {/* Orientamento fisico: mettili tutti (In Costa / In Pila / Frontale) */}
-              <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
-                <span className="text-[10px] text-slate-400 px-1 font-semibold">Orientamento:</span>
-                <button
-                  onClick={(e) => onSetOrientation ? onSetOrientation(selectedPlaced.id, 'vertical', e) : onToggleOrientation?.(selectedPlaced.id, e)}
-                  className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 font-medium cursor-pointer ${
-                    selectedPlaced.orientation === 'vertical'
-                      ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                  title="In costa (verticale - tipo libro)"
-                >
-                  <MoveVertical className="w-3 h-3" />
-                  <span>In costa</span>
-                </button>
-                <button
-                  onClick={(e) => onSetOrientation ? onSetOrientation(selectedPlaced.id, 'horizontal', e) : onToggleOrientation?.(selectedPlaced.id, e)}
-                  className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 font-medium cursor-pointer ${
-                    selectedPlaced.orientation === 'horizontal'
-                      ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                  title="In pila (orizzontale - una sopra l'altra)"
-                >
-                  <Layers className="w-3 h-3" />
-                  <span>In pila</span>
-                </button>
-                <button
-                  onClick={(e) => onSetOrientation ? onSetOrientation(selectedPlaced.id, 'frontal', e) : onToggleOrientation?.(selectedPlaced.id, e)}
-                  className={`px-2 py-1 rounded text-xs transition-colors flex items-center gap-1 font-medium cursor-pointer ${
-                    selectedPlaced.orientation === 'frontal'
-                      ? 'bg-amber-500 text-slate-950 font-bold shadow-sm'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-800'
-                  }`}
-                  title="Frontale (copertina a vista)"
-                >
-                  <Eye className="w-3 h-3" />
-                  <span>Frontale</span>
-                </button>
+                <BoxIcon className="w-5 h-5 drop-shadow" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-bold text-white leading-snug break-words">
+                  {selectedGame.name}
+                </h3>
+                <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold whitespace-nowrap">
+                    Vano attuale: [{selectedPlaced.cubeRow + 1},{selectedPlaced.cubeCol + 1}]
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
-
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {Array.from({ length: config.rows }).map((_, r) =>
-              Array.from({ length: config.cols }).map((_, c) => {
-                const isCurrent = r === selectedPlaced.cubeRow && c === selectedPlaced.cubeCol;
-                const targetCubeBoxes = placedBoxes.filter(
-                  (p) => p.cubeRow === r && p.cubeCol === c && p.id !== selectedPlaced.id
-                );
-                const fit = canGameFitInCube(
-                  config.cubeWidth,
-                  config.cubeHeight,
-                  config.cubeDepth,
-                  targetCubeBoxes,
-                  selectedGame,
-                  gamesMap,
-                  selectedPlaced.orientation,
-                  selectedPlaced.rotation90
-                );
-                const isDisabled = !isCurrent && !fit.canFit;
-
-                return (
-                  <button
-                    key={`transfer-to-${r}-${c}`}
-                    disabled={isDisabled}
-                    onClick={() => {
-                      if (onMoveBoxToCube) {
-                        onMoveBoxToCube(selectedPlaced.id, r, c);
-                      }
-                    }}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center gap-1.5 ${
-                      isCurrent
-                        ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/60 hover:bg-emerald-900/50 cursor-pointer shadow-sm ring-1 ring-emerald-500/30'
-                        : !fit.canFit
-                        ? 'bg-red-950/40 text-red-400/60 border border-red-900/40 cursor-not-allowed'
-                        : 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md active:scale-95 cursor-pointer'
-                    }`}
-                    title={
-                      isCurrent
-                        ? `Vano attuale [${r + 1},${c + 1}] — "${selectedGame.name}" si trova già qui`
-                        : !fit.canFit
-                        ? `Non entra: ${fit.reason}`
-                        : `Trasferisci nel vano [${r + 1},${c + 1}]`
-                    }
-                  >
-                    <span>Vano {r + 1},{c + 1}</span>
-                    {isCurrent ? (
-                      <span className="text-[9px] text-emerald-400 font-sans font-semibold">Attuale</span>
-                    ) : !fit.canFit ? (
-                      <span className="text-[9px] text-red-400/80 font-normal">Pieno</span>
-                    ) : null}
-                  </button>
-                );
-              })
-            )}
             <button
               onClick={() => onSelectBox(null)}
-              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors ml-1"
+              className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors shrink-0 cursor-pointer"
               title="Deseleziona scatola"
+              aria-label="Deseleziona scatola"
             >
               <X className="w-4 h-4" />
             </button>
+          </div>
+
+          {/* Row 2: Rotate + Stacked Orientation Options (one below the other on mobile) */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-slate-950/90 p-2.5 rounded-xl border border-slate-800">
+            <div className="flex items-center justify-between sm:justify-start gap-2">
+              <span className="text-[11px] text-slate-300 font-semibold">Orientamento:</span>
+              <button
+                onClick={(e) => onRotateBox(selectedPlaced.id, e)}
+                className="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 transition-all flex items-center justify-center gap-1.5 text-xs font-bold shadow cursor-pointer active:scale-95 shrink-0"
+                title={`Ruota 90° (${selectedPlaced.rotation90}°)`}
+                aria-label={`Ruota ${selectedGame.name} di 90 gradi`}
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+                <span>Ruota 90°</span>
+              </button>
+            </div>
+
+            {/* Orientation Options: stacked one under another on mobile, horizontal on sm+ */}
+            <div className="flex flex-col sm:flex-row gap-1.5 w-full sm:w-auto">
+              <button
+                onClick={(e) => onSetOrientation ? onSetOrientation(selectedPlaced.id, 'vertical', e) : onToggleOrientation?.(selectedPlaced.id, e)}
+                className={`w-full sm:w-auto px-2.5 py-1.5 rounded-lg text-xs transition-colors flex items-center justify-start sm:justify-center gap-1.5 font-medium cursor-pointer border ${
+                  selectedPlaced.orientation === 'vertical'
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-sm'
+                    : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:text-white hover:bg-slate-800'
+                }`}
+                title="In costa (verticale - tipo libro)"
+              >
+                <MoveVertical className="w-3.5 h-3.5 shrink-0" />
+                <span>In costa</span>
+              </button>
+              <button
+                onClick={(e) => onSetOrientation ? onSetOrientation(selectedPlaced.id, 'horizontal', e) : onToggleOrientation?.(selectedPlaced.id, e)}
+                className={`w-full sm:w-auto px-2.5 py-1.5 rounded-lg text-xs transition-colors flex items-center justify-start sm:justify-center gap-1.5 font-medium cursor-pointer border ${
+                  selectedPlaced.orientation === 'horizontal'
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-sm'
+                    : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:text-white hover:bg-slate-800'
+                }`}
+                title="In pila (orizzontale - una sopra l'altra)"
+              >
+                <Layers className="w-3.5 h-3.5 shrink-0" />
+                <span>In pila</span>
+              </button>
+              <button
+                onClick={(e) => onSetOrientation ? onSetOrientation(selectedPlaced.id, 'frontal', e) : onToggleOrientation?.(selectedPlaced.id, e)}
+                className={`w-full sm:w-auto px-2.5 py-1.5 rounded-lg text-xs transition-colors flex items-center justify-start sm:justify-center gap-1.5 font-medium cursor-pointer border ${
+                  selectedPlaced.orientation === 'frontal'
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold shadow-sm'
+                    : 'bg-slate-900/90 text-slate-300 border-slate-800 hover:text-white hover:bg-slate-800'
+                }`}
+                title="Frontale (copertina a vista)"
+              >
+                <Eye className="w-3.5 h-3.5 shrink-0" />
+                <span>Frontale</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Row 3: Quick Transfer Grid */}
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs text-slate-300 flex items-center gap-1.5">
+              <ArrowRightLeft className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+              <span>Tocca un vano per trasferire:</span>
+            </p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {Array.from({ length: config.rows }).map((_, r) =>
+                Array.from({ length: config.cols }).map((_, c) => {
+                  const isCurrent = r === selectedPlaced.cubeRow && c === selectedPlaced.cubeCol;
+                  const targetCubeBoxes = placedBoxes.filter(
+                    (p) => p.cubeRow === r && p.cubeCol === c && p.id !== selectedPlaced.id
+                  );
+                  let fit = canGameFitInCube(
+                    config.cubeWidth,
+                    config.cubeHeight,
+                    config.cubeDepth,
+                    targetCubeBoxes,
+                    selectedGame,
+                    gamesMap,
+                    selectedPlaced.orientation,
+                    selectedPlaced.rotation90
+                  );
+                  if (!fit.canFit) {
+                    fit = canGameFitInCube(
+                      config.cubeWidth,
+                      config.cubeHeight,
+                      config.cubeDepth,
+                      targetCubeBoxes,
+                      selectedGame,
+                      gamesMap
+                    );
+                  }
+                  const isDisabled = !isCurrent && !fit.canFit;
+
+                  return (
+                    <button
+                      key={`transfer-to-${r}-${c}`}
+                      disabled={isDisabled}
+                      onClick={() => {
+                        if (onMoveBoxToCube) {
+                          onMoveBoxToCube(selectedPlaced.id, r, c);
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all flex items-center gap-1.5 ${
+                        isCurrent
+                          ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/60 hover:bg-emerald-900/50 cursor-pointer shadow-sm ring-1 ring-emerald-500/30'
+                          : !fit.canFit
+                          ? 'bg-red-950/40 text-red-400/60 border border-red-900/40 cursor-not-allowed'
+                          : 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md active:scale-95 cursor-pointer'
+                      }`}
+                      title={
+                        isCurrent
+                          ? `Vano attuale [${r + 1},${c + 1}] — "${selectedGame.name}" si trova già qui`
+                          : !fit.canFit
+                          ? `Non entra: ${fit.reason}`
+                          : `Trasferisci nel vano [${r + 1},${c + 1}]`
+                      }
+                    >
+                      <span>Vano {r + 1},{c + 1}</span>
+                      {isCurrent ? (
+                        <span className="text-[9px] text-emerald-400 font-sans font-semibold">Attuale</span>
+                      ) : !fit.canFit ? (
+                        <span className="text-[9px] text-red-400/80 font-normal">Pieno</span>
+                      ) : null}
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -554,7 +575,7 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
         /* Physical IKEA Kallax Shelf Representation: White frame and realistic dividers */
         <div className="w-full flex justify-center overflow-x-auto pb-4">
           <div
-            className={`relative w-full max-w-4xl p-2.5 sm:p-3.5 rounded-xl sm:rounded-2xl transition-all duration-300 ${frameStyle.frameBg} ${frameStyle.borderColor} border-[8px] sm:border-[12px] shadow-2xl`}
+            className={`relative isolate w-full max-w-4xl p-2.5 sm:p-3.5 rounded-xl sm:rounded-2xl transition-all duration-300 ${frameStyle.frameBg} ${frameStyle.borderColor} border-[8px] sm:border-[12px] shadow-2xl`}
             style={{
               maxWidth: '100%',
               boxShadow: '0 10px 25px -5px rgba(0,0,0,0.6)',

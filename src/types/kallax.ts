@@ -91,5 +91,7 @@ export interface FitCheckResult {
   reason?: string;
   suggestedOrientation?: ShelfOrientation;
   suggestedRotation?: number;
+  suggestedPosX?: number;
+  suggestedPosY?: number;
   protrudesDepthCm?: number;
 }

@@ -48,7 +48,7 @@ interface KallaxCubeViewProps {
   onSetOrientation?: (placedId: string, orientation: ShelfOrientation, e: React.MouseEvent) => void;
   onAutoOptimizeCube?: (row: number, col: number, e: React.MouseEvent) => void;
   onDropGame: (gameId: string, row: number, col: number) => void;
-  onMoveBoxToCube?: (placedId: string, targetRow: number, targetCol: number) => void;
+  onMoveBoxToCube?: (placedId: string, targetRow: number, targetCol: number, dropPosX?: number, dropPosY?: number) => void;
   onUpdatePlacement?: (placedId: string, updates: Partial<PlacedBox>) => void;
   onReorderBoxes?: (newBoxes: PlacedBox[]) => void;
   onShowToast?: (type: 'success' | 'warning' | 'error', message: string) => void;
@@ -365,6 +365,35 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
     }
 
     const currentBox2D = current2DBoxes.find((b) => b.id === draggingPlacedId);
+
+    // Check if pointer was released over a DIFFERENT cube (e.g. dragging between unlocked cubes)
+    if (isFreeSortUnlocked && currentBox2D && onMoveBoxToCube) {
+      const elementsUnder = document.elementsFromPoint(e.clientX, e.clientY);
+      const targetInterior = elementsUnder.find((el) => {
+        const tr = el.getAttribute('data-cube-row');
+        const tc = el.getAttribute('data-cube-col');
+        return tr !== null && tc !== null && (Number(tr) !== row || Number(tc) !== col);
+      }) as HTMLElement | undefined;
+
+      if (targetInterior) {
+        const targetRow = Number(targetInterior.getAttribute('data-cube-row'));
+        const targetCol = Number(targetInterior.getAttribute('data-cube-col'));
+        const tRect = targetInterior.getBoundingClientRect();
+        const dropX = clampToShelf(
+          {
+            ...currentBox2D,
+            x: ((e.clientX - tRect.left) / Math.max(1, tRect.width)) * config.cubeWidth - currentBox2D.width / 2,
+            y: ((tRect.bottom - e.clientY) / Math.max(1, tRect.height)) * config.cubeHeight - currentBox2D.height / 2,
+          },
+          { width: config.cubeWidth, height: config.cubeHeight }
+        );
+        onMoveBoxToCube(draggingPlacedId, targetRow, targetCol, Math.round(dropX.x * 10) / 10, Math.round(dropX.y * 10) / 10);
+        setDraggingPlacedId(null);
+        setDragPos(null);
+        return;
+      }
+    }
+
     if (dragPos && currentBox2D && onUpdatePlacement) {
       if (isFreeSortUnlocked) {
         // Modalità libera con lucchetto aperto: salva direttamente la posizione senza respingere
@@ -561,7 +590,7 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
           <div
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            className="absolute -top-11 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-slate-950/95 border border-amber-400/90 rounded-xl py-1 px-2.5 shadow-2xl z-50 whitespace-nowrap animate-in fade-in zoom-in-95"
+            className="hidden sm:flex absolute -top-11 left-1/2 -translate-x-1/2 items-center gap-1.5 bg-slate-950/95 border border-amber-400/90 rounded-xl py-1 px-2.5 shadow-2xl z-50 whitespace-nowrap animate-in fade-in zoom-in-95"
           >
             {/* Solo icona per Ruota */}
             <button
@@ -681,7 +710,7 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
                   const targetCubeBoxes = (allPlacedBoxes || []).filter(
                     (p) => p.cubeRow === r && p.cubeCol === c && p.id !== placed.id
                   );
-                  const fit = canGameFitInCube(
+                  let fit = canGameFitInCube(
                     config.cubeWidth,
                     config.cubeHeight,
                     config.cubeDepth,
@@ -691,6 +720,16 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
                     placed.orientation,
                     placed.rotation90
                   );
+                  if (!fit.canFit) {
+                    fit = canGameFitInCube(
+                      config.cubeWidth,
+                      config.cubeHeight,
+                      config.cubeDepth,
+                      targetCubeBoxes,
+                      game,
+                      gamesMap
+                    );
+                  }
                   const isDisabled = !isCurrent && !fit.canFit;
 
                   return (
@@ -961,6 +1000,8 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
       {/* Cube Interior Area: EXACT 1:1 PROPORTIONAL SPACE ("lo spazio del vano") */}
       <div
         ref={interiorContainerRef}
+        data-cube-row={row}
+        data-cube-col={col}
         onPointerMove={handleShelfPointerMove}
         onPointerUp={handleShelfPointerUp}
         onPointerCancel={handleShelfPointerUp}

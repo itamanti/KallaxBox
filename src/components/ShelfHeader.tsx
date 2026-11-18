@@ -68,7 +68,7 @@ export const ShelfHeader: React.FC<ShelfHeaderProps> = ({
       </header>
 
       {/* Mobile Fixed Bottom Tab Bar (under 15% viewport height, thumb navigation) */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 md:hidden bg-slate-950/95 backdrop-blur-md border-t border-slate-800 grid grid-cols-3 items-center h-14 px-2">
+      <div className="fixed bottom-0 left-0 right-0 z-40 md:hidden bg-slate-950/95 backdrop-blur-md border-t border-slate-800 grid grid-cols-3 items-center h-14 px-2">
         <button
           onClick={() => {
             // Scroll to top / shelf

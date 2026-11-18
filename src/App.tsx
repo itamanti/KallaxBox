@@ -527,8 +527,8 @@ export default function App() {
               ...p,
               orientation,
               rotation90: check.suggestedRotation ?? p.rotation90,
-              posX: undefined,
-              posY: undefined,
+              posX: check.suggestedPosX,
+              posY: check.suggestedPosY,
             }
           : p
       );
@@ -624,7 +624,7 @@ export default function App() {
     const targetOrientation = preferredOrientation ?? (existing ? existing.orientation : undefined);
     const targetRotation = preferredRotation ?? (existing ? existing.rotation90 : undefined);
 
-    const fit = canGameFitInCube(
+    let fit = canGameFitInCube(
       config.cubeWidth,
       config.cubeHeight,
       config.cubeDepth,
@@ -635,6 +635,21 @@ export default function App() {
       targetRotation,
       false
     );
+    // If dragged from another cube with a locked preferred orientation that doesn't fit,
+    // automatically adapt orientation (e.g. horizontal above shorter boxes) when explicit preference wasn't forced
+    if (!fit.canFit && !preferredOrientation && targetOrientation !== undefined) {
+      fit = canGameFitInCube(
+        config.cubeWidth,
+        config.cubeHeight,
+        config.cubeDepth,
+        targetCubeBoxes,
+        game,
+        gamesMap,
+        undefined,
+        undefined,
+        false
+      );
+    }
     if (!fit.canFit) {
       setToast({
         type: 'error',
@@ -654,8 +669,8 @@ export default function App() {
                 orientation: fit.suggestedOrientation ?? targetOrientation ?? existing.orientation,
                 rotation90: fit.suggestedRotation ?? targetRotation ?? existing.rotation90,
                 order: targetCubeBoxes.length,
-                posX: undefined,
-                posY: undefined,
+                posX: fit.suggestedPosX,
+                posY: fit.suggestedPosY,
               }
             : p
         );
@@ -670,6 +685,8 @@ export default function App() {
         orientation: fit.suggestedOrientation ?? targetOrientation ?? 'vertical',
         rotation90: fit.suggestedRotation ?? targetRotation ?? 0,
         order: targetCubeBoxes.length,
+        posX: fit.suggestedPosX,
+        posY: fit.suggestedPosY,
       };
       setPlacedBoxes((prev) => syncCubePlacements([...prev, newPlaced], row, col));
     }
@@ -693,8 +710,14 @@ export default function App() {
     setPlacedBoxes((prev) => prev.filter((p) => p.id !== placedId));
   };
 
-  // Move a box to another cube (preserves orientation where possible, adapts if needed)
-  const handleMoveToCube = (placedId: string, targetRow: number, targetCol: number) => {
+  // Move a box to another cube (preserves orientation where possible, adapts to horizontal/2D free space if needed)
+  const handleMoveToCube = (
+    placedId: string,
+    targetRow: number,
+    targetCol: number,
+    dropPosX?: number,
+    dropPosY?: number
+  ) => {
     const placed = placedBoxes.find((p) => p.id === placedId);
     if (!placed) return;
     const game = gamesMap[placed.gameId];
@@ -712,7 +735,7 @@ export default function App() {
     const targetCubeBoxes = placedBoxes.filter(
       (p) => p.cubeRow === targetRow && p.cubeCol === targetCol && p.id !== placedId
     );
-    const fit = canGameFitInCube(
+    let fit = canGameFitInCube(
       config.cubeWidth,
       config.cubeHeight,
       config.cubeDepth,
@@ -723,6 +746,20 @@ export default function App() {
       placed.rotation90,
       false
     );
+    // If current orientation can't fit (e.g. vertical floor full, but horizontal fits above shorter boxes), auto-adapt
+    if (!fit.canFit) {
+      fit = canGameFitInCube(
+        config.cubeWidth,
+        config.cubeHeight,
+        config.cubeDepth,
+        targetCubeBoxes,
+        game,
+        gamesMap,
+        undefined,
+        undefined,
+        false
+      );
+    }
     if (!fit.canFit) {
       setToast({
         type: 'error',
@@ -733,6 +770,10 @@ export default function App() {
 
     const oldRow = placed.cubeRow;
     const oldCol = placed.cubeCol;
+    const nextOri = fit.suggestedOrientation ?? placed.orientation;
+    const nextRot = fit.suggestedRotation ?? placed.rotation90;
+    const nextPosX = dropPosX !== undefined && fit.suggestedPosX === undefined ? dropPosX : (fit.suggestedPosX ?? dropPosX);
+    const nextPosY = dropPosY !== undefined && fit.suggestedPosY === undefined ? dropPosY : (fit.suggestedPosY ?? dropPosY);
 
     setPlacedBoxes((prev) => {
       const updated = prev.map((p) =>
@@ -741,11 +782,12 @@ export default function App() {
               ...p,
               cubeRow: targetRow,
               cubeCol: targetCol,
-              orientation: fit.suggestedOrientation ?? placed.orientation,
-              rotation90: fit.suggestedRotation ?? placed.rotation90,
+              orientation: nextOri,
+              rotation90: nextRot,
               order: targetCubeBoxes.length,
-              posX: undefined,
-              posY: undefined,
+              posX: nextPosX,
+              posY: nextPosY,
+              lastMovedAt: Date.now(),
             }
           : p
       );

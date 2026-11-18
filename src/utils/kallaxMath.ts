@@ -224,16 +224,33 @@ export function calculateCubeSpace(
   // If boxes have explicit valid 2D coordinates that fit cleanly without overflow (e.g. stacked or staged):
   const allHaveCoords = placedBoxes.length > 0 && placedBoxes.every((p) => p.posX !== undefined && p.posY !== undefined);
   if (allHaveCoords) {
+    const rects: Array<{ x: number; y: number; width: number; height: number }> = [];
     let maxExtX = 0;
     let maxExtY = 0;
     for (const p of placedBoxes) {
       const g = gamesMap[p.gameId];
       if (!g) continue;
       const eff = getEffectiveDimensions(g, p.orientation, p.rotation90);
-      maxExtX = Math.max(maxExtX, (p.posX ?? 0) + eff.displayWidth);
-      maxExtY = Math.max(maxExtY, (p.posY ?? 0) + eff.displayHeight);
+      const px = p.posX ?? 0;
+      const py = p.posY ?? 0;
+      rects.push({ x: px, y: py, width: eff.displayWidth, height: eff.displayHeight });
+      maxExtX = Math.max(maxExtX, px + eff.displayWidth);
+      maxExtY = Math.max(maxExtY, py + eff.displayHeight);
     }
-    if (maxExtX <= cubeWidth + 0.1 && maxExtY <= cubeHeight + 0.1) {
+    let hasRectOverlap = false;
+    for (let i = 0; i < rects.length && !hasRectOverlap; i++) {
+      for (let j = i + 1; j < rects.length; j++) {
+        const left = Math.max(rects[i].x, rects[j].x);
+        const right = Math.min(rects[i].x + rects[i].width, rects[j].x + rects[j].width);
+        const bottom = Math.max(rects[i].y, rects[j].y);
+        const top = Math.min(rects[i].y + rects[i].height, rects[j].y + rects[j].height);
+        if (right - left > 0.05 && top - bottom > 0.05) {
+          hasRectOverlap = true;
+          break;
+        }
+      }
+    }
+    if (!hasRectOverlap && maxExtX <= cubeWidth + 0.1 && maxExtY <= cubeHeight + 0.1) {
       totalWidthUsed = Math.round(maxExtX * 10) / 10;
       totalHeightUsed = Math.round(maxExtY * 10) / 10;
     }
@@ -1838,6 +1855,113 @@ export function canGameFitInCube(
       ? Math.round((shelfDepth - cubeDepth) * 10) / 10
       : undefined;
 
+  const findFreeSlotInCube = (
+    boxWidth: number,
+    boxHeight: number
+  ): { posX: number; posY: number } | null => {
+    if (boxWidth > cubeWidth + 0.1 || boxHeight > cubeHeight + 0.1) return null;
+
+    // Build 2D bounding rectangles of all currently placed boxes
+    const defaultHorizBoxes = currentPlaced.filter(
+      (p) => p.orientation === 'horizontal' && (p.posX === undefined || p.posY === undefined)
+    );
+    const sortedHoriz = [...defaultHorizBoxes].sort((a, b) => a.order - b.order);
+    const nonHoriz = currentPlaced
+      .filter((p) => !(p.orientation === 'horizontal' && (p.posX === undefined || p.posY === undefined)))
+      .filter((p) => p.posX === undefined || p.posY === undefined)
+      .sort((a, b) => a.order - b.order);
+
+    const existingRects = currentPlaced.map((placed) => {
+      const g = gamesMap[placed.gameId];
+      const eff = g
+        ? getEffectiveDimensions(g, placed.orientation, placed.rotation90)
+        : { displayWidth: 10, displayHeight: 10, shelfDepth: 10 };
+      let x = placed.posX;
+      let y = placed.posY;
+      if (x === undefined || y === undefined) {
+        if (placed.orientation === 'horizontal') {
+          let accY = 0;
+          for (const h of sortedHoriz) {
+            if (h.id === placed.id) break;
+            const hg = gamesMap[h.gameId];
+            if (hg) accY += getEffectiveDimensions(hg, h.orientation, h.rotation90).displayHeight;
+          }
+          x = 0;
+          y = accY;
+        } else {
+          let accX = 0;
+          if (defaultHorizBoxes.length > 0) {
+            let maxHW = 0;
+            for (const h of defaultHorizBoxes) {
+              const hg = gamesMap[h.gameId];
+              if (hg) maxHW = Math.max(maxHW, getEffectiveDimensions(hg, h.orientation, h.rotation90).displayWidth);
+            }
+            accX = maxHW;
+          }
+          for (const nh of nonHoriz) {
+            if (nh.id === placed.id) break;
+            const nhg = gamesMap[nh.gameId];
+            if (nhg) accX += getEffectiveDimensions(nhg, nh.orientation, nh.rotation90).displayWidth;
+          }
+          x = accX;
+          y = 0;
+        }
+      }
+      return { x, y, width: eff.displayWidth, height: eff.displayHeight };
+    });
+
+    const maxValidX = Math.max(0, cubeWidth - boxWidth);
+    const candXs = new Set<number>([0, Math.round(maxValidX * 10) / 10]);
+    const candYs = new Set<number>([0]);
+    for (const r of existingRects) {
+      candXs.add(Math.min(maxValidX, Math.max(0, Math.round(r.x * 10) / 10)));
+      candXs.add(Math.min(maxValidX, Math.max(0, Math.round((r.x + r.width) * 10) / 10)));
+      candXs.add(Math.min(maxValidX, Math.max(0, Math.round((r.x - boxWidth) * 10) / 10)));
+      candYs.add(Math.round((r.y + r.height) * 10) / 10);
+    }
+
+    const sortedYs = Array.from(candYs).sort((a, b) => a - b);
+    const sortedXs = Array.from(candXs).sort((a, b) => a - b);
+
+    for (const cy of sortedYs) {
+      if (cy < -0.05 || cy + boxHeight > cubeHeight + 0.1) continue;
+      for (const cx of sortedXs) {
+        if (cx < -0.05 || cx + boxWidth > cubeWidth + 0.1) continue;
+
+        let overlaps = false;
+        for (const r of existingRects) {
+          const left = Math.max(cx, r.x);
+          const right = Math.min(cx + boxWidth, r.x + r.width);
+          const bottom = Math.max(cy, r.y);
+          const top = Math.min(cy + boxHeight, r.y + r.height);
+          if (right - left > 0.05 && top - bottom > 0.05) {
+            overlaps = true;
+            break;
+          }
+        }
+        if (overlaps) continue;
+
+        // Require physical support underneath (either floor or resting on top of existing box(es))
+        if (cy > 0.05) {
+          let supportedSpan = 0;
+          for (const r of existingRects) {
+            if (Math.abs(r.y + r.height - cy) <= 0.15) {
+              const spanOverlap = Math.min(cx + boxWidth, r.x + r.width) - Math.max(cx, r.x);
+              if (spanOverlap > 0) supportedSpan += spanOverlap;
+            }
+          }
+          if (supportedSpan < Math.min(boxWidth * 0.25, 2.5)) continue;
+        }
+
+        return {
+          posX: Math.round(Math.max(0, cx) * 10) / 10,
+          posY: Math.round(Math.max(0, cy) * 10) / 10,
+        };
+      }
+    }
+    return null;
+  };
+
   // 1. If preferred target orientation was provided (e.g. moving a box in costa):
   if (targetOrientation !== undefined) {
     const candidateRots = [targetRotation ?? 0, 90, 180, 270];
@@ -1867,6 +1991,21 @@ export function canGameFitInCube(
             suggestedRotation: testRot,
             protrudesDepthCm: getProtrusion(space.maxDepthUsed),
           };
+        }
+
+        // Check 2D free space (e.g. above shorter boxes) when not strictly constrained to floor-only
+        if (!strictOrientation) {
+          const slot = findFreeSlotInCube(eff.displayWidth, eff.displayHeight);
+          if (slot) {
+            return {
+              canFit: true,
+              suggestedOrientation: targetOrientation,
+              suggestedRotation: testRot,
+              suggestedPosX: slot.posX,
+              suggestedPosY: slot.posY,
+              protrudesDepthCm: getProtrusion(Math.max(space.maxDepthUsed, eff.shelfDepth)),
+            };
+          }
         }
       }
     }
@@ -1991,7 +2130,7 @@ export function canGameFitInCube(
     }
   }
 
-  // Also test if newGame can be placed in horizontal orientation stacked with existing boxes:
+  // Also test if newGame can be placed in horizontal orientation stacked with or above existing boxes:
   for (const allowDepthProtrusion of [false, true]) {
     for (const rot of [0, 90]) {
       const eff = getEffectiveDimensions(newGame, 'horizontal', rot);
@@ -2017,6 +2156,41 @@ export function canGameFitInCube(
           suggestedRotation: rot,
           protrudesDepthCm: getProtrusion(space.maxDepthUsed),
         };
+      }
+
+      if (!strictOrientation) {
+        const slot = findFreeSlotInCube(eff.displayWidth, eff.displayHeight);
+        if (slot) {
+          return {
+            canFit: true,
+            suggestedOrientation: 'horizontal',
+            suggestedRotation: rot,
+            suggestedPosX: slot.posX,
+            suggestedPosY: slot.posY,
+            protrudesDepthCm: getProtrusion(Math.max(currentSpace.maxDepthUsed, eff.shelfDepth)),
+          };
+        }
+      }
+    }
+  }
+
+  // Test if newGame fits in vertical orientation in any remaining 2D free slot (e.g. above lower boxes):
+  if (!strictOrientation) {
+    for (const allowDepthProtrusion of [false, true]) {
+      for (const rot of [0, 90]) {
+        const eff = getEffectiveDimensions(newGame, 'vertical', rot);
+        if (!allowDepthProtrusion && eff.shelfDepth > cubeDepth + 0.1) continue;
+        const slot = findFreeSlotInCube(eff.displayWidth, eff.displayHeight);
+        if (slot) {
+          return {
+            canFit: true,
+            suggestedOrientation: 'vertical',
+            suggestedRotation: rot,
+            suggestedPosX: slot.posX,
+            suggestedPosY: slot.posY,
+            protrudesDepthCm: getProtrusion(Math.max(currentSpace.maxDepthUsed, eff.shelfDepth)),
+          };
+        }
       }
     }
   }
@@ -2047,6 +2221,20 @@ export function canGameFitInCube(
           suggestedRotation: rot,
           protrudesDepthCm: getProtrusion(space.maxDepthUsed),
         };
+      }
+
+      if (!strictOrientation) {
+        const slot = findFreeSlotInCube(eff.displayWidth, eff.displayHeight);
+        if (slot) {
+          return {
+            canFit: true,
+            suggestedOrientation: 'frontal',
+            suggestedRotation: rot,
+            suggestedPosX: slot.posX,
+            suggestedPosY: slot.posY,
+            protrudesDepthCm: getProtrusion(Math.max(currentSpace.maxDepthUsed, eff.shelfDepth)),
+          };
+        }
       }
     }
   }
@@ -2137,7 +2325,7 @@ export function canChangeOrientationInCube(
   targetPlacedId: string,
   newOrientation: ShelfOrientation,
   gamesMap: Record<string, GameBox>
-): { canChange: boolean; reason?: string; suggestedRotation?: number } {
+): { canChange: boolean; reason?: string; suggestedRotation?: number; suggestedPosX?: number; suggestedPosY?: number } {
   const targetPlaced = cubePlacedBoxes.find((p) => p.id === targetPlacedId);
   const currentRot = targetPlaced?.rotation90 ?? 0;
 
@@ -2154,7 +2342,9 @@ export function canChangeOrientationInCube(
 
   for (const rot of candidateRots) {
     const nextBoxes = cubePlacedBoxes.map((p) =>
-      p.id === targetPlacedId ? { ...p, orientation: newOrientation, rotation90: rot } : p
+      p.id === targetPlacedId
+        ? { ...p, orientation: newOrientation, rotation90: rot, posX: undefined, posY: undefined }
+        : p
     );
     const space = calculateCubeSpace(cubeWidth, cubeHeight, cubeDepth, nextBoxes, gamesMap);
 
@@ -2163,6 +2353,33 @@ export function canChangeOrientationInCube(
     } else {
       if (space.isWidthOverflow) bestFailReason = `Larghezza superata (${space.totalWidthUsed} cm > ${cubeWidth} cm).`;
       else if (space.isHeightOverflow) bestFailReason = `Altezza superata (${space.totalHeightUsed} cm > ${cubeHeight} cm).`;
+    }
+  }
+
+  // Fallback: check if changing orientation allows placing the box in free 2D space (e.g. above shorter boxes)
+  if (targetPlaced) {
+    const targetGame = gamesMap[targetPlaced.gameId];
+    if (targetGame) {
+      const otherBoxes = cubePlacedBoxes.filter((p) => p.id !== targetPlacedId);
+      const fitSlot = canGameFitInCube(
+        cubeWidth,
+        cubeHeight,
+        cubeDepth,
+        otherBoxes,
+        targetGame,
+        gamesMap,
+        newOrientation,
+        currentRot,
+        false
+      );
+      if (fitSlot.canFit && fitSlot.suggestedOrientation === newOrientation) {
+        return {
+          canChange: true,
+          suggestedRotation: fitSlot.suggestedRotation ?? currentRot,
+          suggestedPosX: fitSlot.suggestedPosX,
+          suggestedPosY: fitSlot.suggestedPosY,
+        };
+      }
     }
   }
 

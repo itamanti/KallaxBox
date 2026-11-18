@@ -173,8 +173,8 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
             ...p,
             orientation,
             rotation90: check.suggestedRotation ?? p.rotation90,
-            posX: undefined,
-            posY: undefined,
+            posX: check.suggestedPosX,
+            posY: check.suggestedPosY,
           }
         : p
     );

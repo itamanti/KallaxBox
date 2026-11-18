@@ -327,4 +327,81 @@ test('validateAndPackCubeBoxes allows boxes that protrude in shelf depth without
   assert.equal(validation.packedBoxes[0].posX, 0);
 });
 
+test('validateAndPackCubeBoxes keeps multiple floor vertical boxes side-by-side when a wide upper horizontal box sits on top', () => {
+  const shelf: ShelfBounds = { width: 33.5, height: 33.5 };
+  const boxA: GameBox = { id: 'g-a', name: 'Box A', width: 22.0, height: 22.0, depth: 6.0 };
+  const boxB: GameBox = { id: 'g-b', name: 'Box B', width: 24.0, height: 24.0, depth: 6.0 };
+  const boxC: GameBox = { id: 'g-c', name: 'Box C', width: 23.0, height: 23.0, depth: 6.0 };
+  const tallD: GameBox = { id: 'g-d', name: 'Tall D', width: 31.0, height: 31.0, depth: 9.0 };
+  const upperFlat: GameBox = { id: 'g-u', name: 'Upper Flat', width: 17.5, height: 14.0, depth: 5.0 };
+
+  const gamesMap = {
+    'g-a': boxA,
+    'g-b': boxB,
+    'g-c': boxC,
+    'g-d': tallD,
+    'g-u': upperFlat,
+  };
+
+  // Upper flat box (17.5 x 5) spans across floor boxes A, B, and C (each 6 cm wide = 18 cm span)
+  const placed: PlacedBox[] = [
+    { id: 'p-a', gameId: 'g-a', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 0, posX: 0, posY: 0 },
+    { id: 'p-b', gameId: 'g-b', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 1, posX: 6.5, posY: 0 },
+    { id: 'p-c', gameId: 'g-c', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 2, posX: 13.0, posY: 0 },
+    { id: 'p-d', gameId: 'g-d', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 3, posX: 22.0, posY: 0 },
+    { id: 'p-u', gameId: 'g-u', cubeRow: 0, cubeCol: 0, orientation: 'horizontal', rotation90: 0, order: 4, posX: 0.5, posY: 25.0 },
+  ];
+
+  const validation = validateAndPackCubeBoxes(placed, gamesMap, shelf);
+  assert.equal(validation.isValid, true);
+  assert.ok(validation.packedBoxes);
+
+  // Floor boxes must all remain on floor y=0 and packed flush left-to-right (0, 6, 12, 18)
+  const pA = validation.packedBoxes.find((p) => p.id === 'p-a')!;
+  const pB = validation.packedBoxes.find((p) => p.id === 'p-b')!;
+  const pC = validation.packedBoxes.find((p) => p.id === 'p-c')!;
+  const pD = validation.packedBoxes.find((p) => p.id === 'p-d')!;
+  const pU = validation.packedBoxes.find((p) => p.id === 'p-u')!;
+
+  assert.equal(pA.posY, 0);
+  assert.equal(pB.posY, 0);
+  assert.equal(pC.posY, 0);
+  assert.equal(pD.posY, 0);
+  assert.equal(pA.posX, 0);
+  assert.equal(pB.posX, 6.0);
+  assert.equal(pC.posX, 12.0);
+  assert.equal(pD.posX, 18.0);
+
+  // Upper box settles cleanly onto the supporting 24 cm peak (posY = 24.0) without colliding
+  assert.equal(pU.posY, 24.0);
+  assert.ok((pU.posX ?? 0) + 17.5 <= 33.5);
+});
+
+test('syncCubePlacedBoxesPositions keeps unpositioned floor boxes on the left when adding an explicit upper horizontal box', () => {
+  const shelf: ShelfBounds = { width: 33.5, height: 33.5 };
+  const v1: GameBox = { id: 'g-v1', name: 'Vert 1', width: 22.0, height: 22.0, depth: 7.0 };
+  const v2: GameBox = { id: 'g-v2', name: 'Vert 2', width: 22.0, height: 22.0, depth: 7.0 };
+  const u1: GameBox = { id: 'g-u1', name: 'Upper 1', width: 14.0, height: 14.0, depth: 5.0 };
+  const gamesMap = { 'g-v1': v1, 'g-v2': v2, 'g-u1': u1 };
+
+  const mixedUnpositionedFloor: PlacedBox[] = [
+    { id: 'p-v1', gameId: 'g-v1', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 0 },
+    { id: 'p-v2', gameId: 'g-v2', cubeRow: 0, cubeCol: 0, orientation: 'vertical', rotation90: 0, order: 1 },
+    { id: 'p-u1', gameId: 'g-u1', cubeRow: 0, cubeCol: 0, orientation: 'horizontal', rotation90: 0, order: 2, posX: 0, posY: 22.0 },
+  ];
+
+  const synced = syncCubePlacedBoxesPositions(mixedUnpositionedFloor, gamesMap, shelf);
+  const sv1 = synced.find((p) => p.id === 'p-v1')!;
+  const sv2 = synced.find((p) => p.id === 'p-v2')!;
+  const su1 = synced.find((p) => p.id === 'p-u1')!;
+
+  assert.equal(sv1.posX, 0);
+  assert.equal(sv1.posY, 0);
+  assert.equal(sv2.posX, 7.0);
+  assert.equal(sv2.posY, 0);
+  assert.equal(su1.posX, 0);
+  assert.equal(su1.posY, 22.0);
+});
+
+
 
