@@ -15,6 +15,7 @@ import {
   getNextValidBoxPose,
   checkPlacementAnomalies,
 } from '../utils/kallaxMath';
+import { computeBoxLabelStyle } from '../utils/boxLabelStyle';
 import {
   Box2D,
   resolveCollisionsAndClamp,
@@ -712,6 +713,12 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                     const bottomPct = (posCmY / config.cubeHeight) * 100;
                     const widthPct = (boxW / config.cubeWidth) * 100;
                     const heightPct = (boxH / config.cubeHeight) * 100;
+                    const labelStyle = computeBoxLabelStyle({
+                      widthPct,
+                      heightPct,
+                      orientation: placed.orientation,
+                      nameLength: game.name.length,
+                    });
 
                     return (
                       <div
@@ -740,7 +747,7 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                       >
                         {/* Title text */}
                         <div
-                          className={`p-1 w-full h-full flex items-center justify-center overflow-hidden text-white font-bold text-[10px] leading-tight pointer-events-none select-none ${
+                          className={`w-full h-full flex items-center justify-center overflow-hidden text-white font-bold pointer-events-none select-none ${
                             placed.orientation === 'vertical'
                               ? `[writing-mode:vertical-rl] ${
                                   placed.rotation90 === 180 || placed.rotation90 === 270 ? 'rotate-0' : 'rotate-180'
@@ -749,7 +756,12 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                               ? `text-center truncate ${placed.rotation90 === 180 ? 'rotate-180' : ''}`
                               : `text-center truncate ${placed.rotation90 === 180 ? 'rotate-180' : ''}`
                           }`}
-                          style={{ textShadow: '0 1px 3px rgba(0,0,0,0.9)' }}
+                          style={{
+                            fontSize: `${labelStyle.fontSizePx}px`,
+                            lineHeight: labelStyle.lineHeight,
+                            padding: `${labelStyle.paddingPx}px`,
+                            textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+                          }}
                         >
                           <span className="truncate max-w-full drop-shadow">
                             {game.name}

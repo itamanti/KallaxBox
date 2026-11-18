@@ -11,6 +11,7 @@ import {
   getEffectiveDimensions,
   canGameFitInCube,
 } from '../utils/kallaxMath';
+import { computeBoxLabelStyle } from '../utils/boxLabelStyle';
 import {
   Box2D,
   resolveCollisionsAndClamp,
@@ -679,6 +680,12 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
     const bottomPct = (posCmY / config.cubeHeight) * 100;
 
     const boxBg = game.color || '#3B82F6';
+    const labelStyle = computeBoxLabelStyle({
+      widthPct,
+      heightPct,
+      orientation: placed.orientation,
+      nameLength: game.name.length,
+    });
 
     return (
       <div
@@ -739,7 +746,7 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
       >
         {/* Spine or Box Label with visible rotation response */}
         <div
-          className={`p-1 w-full h-full flex items-center justify-center overflow-hidden text-white font-semibold text-[10px] leading-tight select-none pointer-events-none ${
+          className={`w-full h-full flex items-center justify-center overflow-hidden text-white font-semibold select-none pointer-events-none ${
             placed.orientation === 'vertical'
               ? `[writing-mode:vertical-rl] ${
                   placed.rotation90 === 180 || placed.rotation90 === 270 ? 'rotate-0' : 'rotate-180'
@@ -748,7 +755,12 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
               ? `text-center truncate ${placed.rotation90 === 180 ? 'rotate-180' : ''}`
               : `text-center truncate ${placed.rotation90 === 180 ? 'rotate-180' : ''}`
           }`}
-          style={{ textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
+          style={{
+            fontSize: `${labelStyle.fontSizePx}px`,
+            lineHeight: labelStyle.lineHeight,
+            padding: `${labelStyle.paddingPx}px`,
+            textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+          }}
         >
           <span className="truncate max-w-full drop-shadow">
             {game.name}
@@ -1115,9 +1127,7 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
         {isInfoOpen && (() => {
           const horizRawPct = Math.max(0, Math.round((space.totalWidthUsed / config.cubeWidth) * 100));
           const horizUsedPct = Math.min(100, horizRawPct);
-          const horizFreePct = Math.max(0, 100 - horizUsedPct);
           const globalUsedPct = Math.min(100, Math.max(0, space.rawVolumePercent));
-          const globalFreePct = Math.max(0, 100 - globalUsedPct);
 
           return (
             <div
@@ -1126,22 +1136,18 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
               onPointerDown={(e) => e.stopPropagation()}
               className="absolute left-1 right-1 top-full mt-1 p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-slate-950/95 border border-amber-500/60 text-[7.5px] sm:text-[9.5px] text-slate-200 shadow-2xl backdrop-blur-md z-50 space-y-1.5 sm:space-y-2 pointer-events-auto animate-in fade-in zoom-in-95 duration-100"
             >
-              {/* Horizontal Occupied / Free Bar */}
+              {/* Horizontal Occupied Bar */}
               <div className="space-y-0.5 sm:space-y-1">
                 <div className="flex items-center justify-between gap-1 font-mono tracking-tighter sm:tracking-normal whitespace-nowrap">
                   <span className="text-slate-300 font-semibold">
                     <span className="sm:hidden">Orizz.</span>
                     <span className="hidden sm:inline">Orizzontale</span>
                   </span>
-                  <span>
-                    <span className={space.isWidthOverflow ? 'text-red-400 font-bold' : 'text-amber-300 font-bold'}>
-                      {horizRawPct}% occ.
-                    </span>
-                    <span className="text-slate-500"> · </span>
-                    <span className="text-emerald-300 font-semibold">{horizFreePct}% lib.</span>
+                  <span className={space.isWidthOverflow ? 'text-red-400 font-bold' : 'text-amber-300 font-bold'}>
+                    {horizRawPct}% occ.
                   </span>
                 </div>
-                <div className="w-full h-1.5 sm:h-2.5 rounded-full bg-emerald-500/20 border border-white/10 overflow-hidden flex">
+                <div className="w-full h-1.5 sm:h-2.5 rounded-full bg-slate-800/80 border border-white/10 overflow-hidden flex">
                   {horizUsedPct > 0 && (
                     <div
                       className={`h-full transition-all ${
@@ -1157,20 +1163,18 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
                 </div>
               </div>
 
-              {/* Global Compartment Volume Occupied / Free Bar */}
+              {/* Global Compartment Volume Occupied Bar */}
               <div className="space-y-0.5 sm:space-y-1">
                 <div className="flex items-center justify-between gap-1 font-mono tracking-tighter sm:tracking-normal whitespace-nowrap">
                   <span className="text-slate-300 font-semibold">
                     <span className="sm:hidden">Globale</span>
                     <span className="hidden sm:inline">Globale vano</span>
                   </span>
-                  <span>
-                    <span className="text-amber-300 font-bold">{globalUsedPct}% occ.</span>
-                    <span className="text-slate-500"> · </span>
-                    <span className="text-emerald-300 font-semibold">{globalFreePct}% lib.</span>
+                  <span className="text-amber-300 font-bold">
+                    {globalUsedPct}% occ.
                   </span>
                 </div>
-                <div className="w-full h-1.5 sm:h-2.5 rounded-full bg-emerald-500/20 border border-white/10 overflow-hidden flex">
+                <div className="w-full h-1.5 sm:h-2.5 rounded-full bg-slate-800/80 border border-white/10 overflow-hidden flex">
                   {globalUsedPct > 0 && (
                     <div
                       className={`h-full transition-all ${
