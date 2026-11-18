@@ -14,9 +14,16 @@ import {
   ChevronUp,
   Box as BoxIcon,
   Sparkles,
+  Palette,
 } from 'lucide-react';
 import { KallaxConfig, PlacedBox, GameBox } from '../types/kallax';
 import { getEffectiveDimensions } from '../utils/kallaxMath';
+import { syncCubePlacedBoxesPositions } from '../utils/kallaxPhysics';
+import {
+  resolveBoxCoverUrl,
+  shouldShowBoxCoverImage,
+  buildProxyImageUrl,
+} from '../utils/boxCover';
 
 interface Kallax3DSceneProps {
   config: KallaxConfig;
@@ -26,75 +33,145 @@ interface Kallax3DSceneProps {
   onSelectBox: (boxId: string | null) => void;
   onOpenCubeDetail: (row: number, col: number) => void;
   onRotateBox?: (placedId: string, e?: React.MouseEvent) => void;
+  showBoxColors?: boolean;
+  onToggleBoxColors?: () => void;
 }
 
-// Procedural texture generator for box faces (spine & cover)
+const loaded3DCoverImageCache = new Map<string, HTMLImageElement | null>();
+const pending3DCoverLoads = new Map<string, Promise<HTMLImageElement | null>>();
+
+const loadCachedCoverImage = (coverUrl: string): Promise<HTMLImageElement | null> => {
+  if (loaded3DCoverImageCache.has(coverUrl)) {
+    return Promise.resolve(loaded3DCoverImageCache.get(coverUrl) || null);
+  }
+  const existing = pending3DCoverLoads.get(coverUrl);
+  if (existing) return existing;
+
+  const promise = new Promise<HTMLImageElement | null>((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      loaded3DCoverImageCache.set(coverUrl, img);
+      pending3DCoverLoads.delete(coverUrl);
+      resolve(img);
+    };
+    img.onerror = () => {
+      loaded3DCoverImageCache.set(coverUrl, null);
+      pending3DCoverLoads.delete(coverUrl);
+      resolve(null);
+    };
+    img.src = coverUrl.startsWith('/') ? coverUrl : buildProxyImageUrl(coverUrl);
+  });
+
+  pending3DCoverLoads.set(coverUrl, promise);
+  return promise;
+};
+
+const drawBoxFaceCanvas = (
+  canvas: HTMLCanvasElement,
+  text: string,
+  bgColor: string,
+  isSpine: boolean,
+  coverImg: HTMLImageElement | null
+) => {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (coverImg && coverImg.naturalWidth > 0 && coverImg.naturalHeight > 0) {
+    // Draw aspect-fill (object-cover) image
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const iw = coverImg.naturalWidth;
+    const ih = coverImg.naturalHeight;
+    const scale = Math.max(cw / iw, ch / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = (cw - dw) / 2;
+    const dy = (ch - dh) / 2;
+    ctx.drawImage(coverImg, dx, dy, dw, dh);
+
+    // Subtle dark scrim so title text remains legible over artwork
+    ctx.fillStyle = isSpine ? 'rgba(15, 23, 42, 0.48)' : 'rgba(15, 23, 42, 0.30)';
+    ctx.fillRect(0, 0, cw, ch);
+  } else {
+    // Base color
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
+
+  // Subtle edge gradient / crease
+  const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
+  grad.addColorStop(0, 'rgba(0,0,0,0.28)');
+  grad.addColorStop(0.08, 'rgba(0,0,0,0.02)');
+  grad.addColorStop(0.92, 'rgba(255,255,255,0.04)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.32)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Border line
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+  ctx.lineWidth = Math.max(2, canvas.width * 0.02);
+  ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
+
+  // Text styling
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  const fontSize = Math.max(
+    14,
+    Math.min(canvas.width * 0.6, canvas.height * 0.25, 48)
+  );
+  ctx.font = `bold ${fontSize}px system-ui, -apple-system, sans-serif`;
+
+  ctx.shadowColor = 'rgba(0,0,0,0.9)';
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 2;
+
+  if (isSpine && canvas.height > canvas.width * 2) {
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(text.slice(0, 24), 0, 0);
+    ctx.restore();
+  } else {
+    ctx.fillText(text.slice(0, 22), canvas.width / 2, canvas.height / 2);
+  }
+};
+
+// Procedural + online cover texture generator for box faces (spine & cover)
 const createBoxFaceTexture = (
-  game: GameBox,
   text: string,
   bgColor: string,
   width: number,
   height: number,
-  isSpine: boolean
+  isSpine: boolean,
+  coverUrl?: string,
+  isDisposed?: () => boolean
 ): THREE.CanvasTexture => {
   const canvas = document.createElement('canvas');
-  // High-DPI canvas texture
   const scale = 4;
   canvas.width = Math.max(128, Math.min(1024, Math.round(width * scale * 4)));
   canvas.height = Math.max(128, Math.min(1024, Math.round(height * scale * 4)));
 
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    // Base color
-    ctx.fillStyle = bgColor;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Subtle edge gradient / crease
-    const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
-    grad.addColorStop(0, 'rgba(0,0,0,0.3)');
-    grad.addColorStop(0.08, 'rgba(0,0,0,0.02)');
-    grad.addColorStop(0.92, 'rgba(255,255,255,0.04)');
-    grad.addColorStop(1, 'rgba(0,0,0,0.35)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Border line
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-    ctx.lineWidth = Math.max(2, canvas.width * 0.02);
-    ctx.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
-
-    // Text styling
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    const fontSize = Math.max(
-      14,
-      Math.min(canvas.width * 0.6, canvas.height * 0.25, 48)
-    );
-    ctx.font = `bold ${fontSize}px system-ui, -apple-system, sans-serif`;
-
-    // Drop shadow for text
-    ctx.shadowColor = 'rgba(0,0,0,0.8)';
-    ctx.shadowBlur = 6;
-    ctx.shadowOffsetX = 2;
-    ctx.shadowOffsetY = 2;
-
-    if (isSpine && canvas.height > canvas.width * 2) {
-      // Vertical spine text: rotate 90 degrees
-      ctx.save();
-      ctx.translate(canvas.width / 2, canvas.height / 2);
-      ctx.rotate(-Math.PI / 2);
-      ctx.fillText(text.slice(0, 24), 0, 0);
-      ctx.restore();
-    } else {
-      // Horizontal text
-      ctx.fillText(text.slice(0, 22), canvas.width / 2, canvas.height / 2);
-    }
-  }
+  const cachedImg = coverUrl ? loaded3DCoverImageCache.get(coverUrl) || null : null;
+  drawBoxFaceCanvas(canvas, text, bgColor, isSpine, cachedImg);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+
+  if (coverUrl && !loaded3DCoverImageCache.has(coverUrl)) {
+    loadCachedCoverImage(coverUrl).then((img) => {
+      if (img && !(isDisposed && isDisposed())) {
+        drawBoxFaceCanvas(canvas, text, bgColor, isSpine, img);
+        texture.needsUpdate = true;
+      }
+    });
+  }
+
   return texture;
 };
 
@@ -106,6 +183,8 @@ export const Kallax3DScene: React.FC<Kallax3DSceneProps> = ({
   onSelectBox,
   onOpenCubeDetail,
   onRotateBox,
+  showBoxColors = false,
+  onToggleBoxColors,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -377,6 +456,8 @@ export const Kallax3DScene: React.FC<Kallax3DSceneProps> = ({
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
+    let disposed = false;
+    const isDisposed = () => disposed;
 
     // Clear previous shelf and boxes
     const toRemove: THREE.Object3D[] = [];
@@ -478,7 +559,24 @@ export const Kallax3DScene: React.FC<Kallax3DSceneProps> = ({
     const boxesGroup = new THREE.Group();
     boxesGroup.userData = { isGameBox: true };
 
+    // Resolve per-cube 2D coordinates consistently with KallaxCubeView (for boxes with unset posX/posY)
+    const boxesByCube = new Map<string, PlacedBox[]>();
     for (const placed of placedBoxes) {
+      const key = `${placed.cubeRow},${placed.cubeCol}`;
+      const list = boxesByCube.get(key);
+      if (list) list.push(placed);
+      else boxesByCube.set(key, [placed]);
+    }
+    const resolvedPlacedBoxes: PlacedBox[] = [];
+    for (const cubeGroup of boxesByCube.values()) {
+      const synced = syncCubePlacedBoxesPositions(cubeGroup, gamesMap, {
+        width: cubeW,
+        height: cubeH,
+      });
+      resolvedPlacedBoxes.push(...synced);
+    }
+
+    for (const placed of resolvedPlacedBoxes) {
       const game = gamesMap[placed.gameId];
       if (!game) continue;
 
@@ -503,31 +601,37 @@ export const Kallax3DScene: React.FC<Kallax3DSceneProps> = ({
       // Color & Textures for 6 faces
       const baseColorHex = game.color || '#3b82f6';
       const isSelected = placed.id === selectedBoxId;
+      const resolvedCover = resolveBoxCoverUrl(game, false);
+      const coverUrlForBox = shouldShowBoxCoverImage(showBoxColors, resolvedCover)
+        ? resolvedCover
+        : undefined;
 
       // Materials for Box faces: [Right, Left, Top, Bottom, Front, Back]
       // Three.js BoxGeometry face order: +X, -X, +Y, -Y, +Z (Front), -Z (Back)
       const frontTex = createBoxFaceTexture(
-        game,
         game.name,
         baseColorHex,
         eff.displayWidth,
         eff.displayHeight,
-        false
+        false,
+        coverUrlForBox,
+        isDisposed
       );
 
       const spineTex = createBoxFaceTexture(
-        game,
         game.name,
         baseColorHex,
         eff.displayWidth,
         eff.displayHeight,
-        true
+        true,
+        coverUrlForBox,
+        isDisposed
       );
 
       const standardFaceMat = new THREE.MeshStandardMaterial({
         color: new THREE.Color(baseColorHex),
-        roughness: 0.35,
-        metalness: 0.1,
+        roughness: 0.42,
+        metalness: 0.08,
       });
 
       const frontFaceMat = new THREE.MeshStandardMaterial({
@@ -595,11 +699,16 @@ export const Kallax3DScene: React.FC<Kallax3DSceneProps> = ({
     }
 
     scene.add(boxesGroup);
+
+    return () => {
+      disposed = true;
+    };
   }, [
     config,
     placedBoxes,
     gamesMap,
     selectedBoxId,
+    showBoxColors,
     getShelfMaterial,
     totalW,
     totalH,
@@ -826,6 +935,32 @@ export const Kallax3DScene: React.FC<Kallax3DSceneProps> = ({
                 Laterale
               </button>
             </div>
+
+            {/* Box Colors vs Cover Images Toggle */}
+            {onToggleBoxColors && (
+              <button
+                type="button"
+                onClick={onToggleBoxColors}
+                aria-pressed={showBoxColors}
+                aria-label={
+                  showBoxColors
+                    ? 'Disattiva colori scatole'
+                    : 'Attiva colori scatole'
+                }
+                title={
+                  showBoxColors
+                    ? 'Colori scatole attivi · Tocca per mostrare le immagini online'
+                    : 'Immagini scatole attive · Tocca per attivare i colori delle scatole'
+                }
+                className={`px-2.5 py-1.5 rounded-xl border flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+                  showBoxColors
+                    ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 hover:bg-amber-500/30'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Palette className="w-3.5 h-3.5" />
+              </button>
+            )}
 
             {/* Zoom In / Out */}
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   GameBox,
   PlacedBox,
@@ -26,6 +26,7 @@ import {
   clearSingleShelfPlacements,
 } from './utils/shelfActions';
 import { createTimeoutSignal } from './utils/network';
+import { sanitizeBoxImageUrl } from './utils/boxCover';
 import { ShelfHeader } from './components/ShelfHeader';
 import { ShelfOverview } from './components/ShelfOverview';
 import { LibraryDrawer } from './components/LibraryDrawer';
@@ -47,28 +48,6 @@ const DEFAULT_CONFIG: KallaxConfig = {
   name: 'Kallax Sala Giochi',
 };
 
-function sanitizeThumbnail(url?: string): string | undefined {
-  if (!url) return undefined;
-  if (
-    url.includes('scout.jpg') ||
-    url.includes('pic5666597.jpg') ||
-    url.includes('cascadia.jpg') ||
-    url.includes('7wondersduel.jpg') ||
-    url.includes('ti4.jpg') ||
-    url.includes('burgundy.jpg') ||
-    url.includes('splendorduel.jpg') ||
-    url.includes('codenames.jpg') ||
-    url.includes('justone.jpg') ||
-    url.includes('nemesis.jpg') ||
-    url.includes('__thumb/img/') ||
-    url.includes('__original/img/') ||
-    /[\u0900-\u097F]/.test(url)
-  ) {
-    return undefined;
-  }
-  return url;
-}
-
 export default function App() {
   // Load games state from localStorage or use defaults
   const [allGames, setAllGames] = useState<GameBox[]>(() => {
@@ -85,7 +64,8 @@ export default function App() {
               width: typeof g.width === 'number' && g.width > 0 ? g.width : 29.7,
               height: typeof g.height === 'number' && g.height > 0 ? g.height : 29.7,
               depth: typeof g.depth === 'number' && g.depth > 0 ? g.depth : 7.2,
-              thumbnail: sanitizeThumbnail(g.thumbnail),
+              thumbnail: sanitizeBoxImageUrl(g.thumbnail),
+              image: sanitizeBoxImageUrl(g.image),
               dimensionSource: g.dimensionSource || (g.bggId ? 'BGG' : 'Catalogo'),
             }));
         }
@@ -211,6 +191,14 @@ export default function App() {
       return '2d';
     }
   });
+  const [showBoxColors, setShowBoxColors] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('kallaxbox_show_box_colors');
+      return saved === null ? false : saved === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [toast, setToast] = useState<{ message: string; type: 'error' | 'warning' | 'success' | 'info' } | null>(null);
   const [isSearchingOnline, setIsSearchingOnline] = useState(false);
 
@@ -252,10 +240,129 @@ export default function App() {
   }, [viewMode]);
 
   useEffect(() => {
+    try {
+      localStorage.setItem('kallaxbox_show_box_colors', String(showBoxColors));
+    } catch {
+      // ignore
+    }
+  }, [showBoxColors]);
+
+  useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), 4500);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  // Background online cover image hydration for shelf & library games missing cover URLs
+  const requestedCoverIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const placedIdsSet = new Set(shelves.flatMap((s) => s.placedBoxes.map((p) => p.gameId)));
+    const missingCovers = allGames
+      .filter((g) => !sanitizeBoxImageUrl(g.thumbnail) && !sanitizeBoxImageUrl(g.image))
+      .filter((g) => !requestedCoverIdsRef.current.has(g.id))
+      .sort((a, b) => Number(placedIdsSet.has(b.id)) - Number(placedIdsSet.has(a.id)));
+
+    if (missingCovers.length === 0) return;
+    missingCovers.forEach((g) => requestedCoverIdsRef.current.add(g.id));
+
+    let cancelled = false;
+    (async () => {
+      const batchSize = 12;
+      let backendAvailable = true;
+
+      for (let i = 0; i < missingCovers.length && !cancelled; i += batchSize) {
+        const batch = missingCovers.slice(i, i + batchSize);
+        let appliedFromBackend = false;
+
+        if (backendAvailable) {
+          try {
+            const resp = await fetch('/api/games/batch-covers', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              signal: createTimeoutSignal(12000),
+              body: JSON.stringify({
+                games: batch.map((g) => ({
+                  id: g.id,
+                  name: g.name,
+                  bggId: g.bggId,
+                })),
+              }),
+            });
+
+            if (resp.ok) {
+              const data = await resp.json();
+              const coverMap = new Map<string, { bggId?: number; thumbnail?: string; image?: string }>();
+              for (const r of data.results || []) {
+                if (r?.id && (r.thumbnail || r.image)) {
+                  coverMap.set(r.id, r);
+                }
+              }
+              if (coverMap.size > 0 && !cancelled) {
+                setAllGames((prev) =>
+                  prev.map((g) => {
+                    const hit = coverMap.get(g.id);
+                    if (!hit) return g;
+                    return {
+                      ...g,
+                      bggId: g.bggId || hit.bggId,
+                      thumbnail: hit.thumbnail || g.thumbnail,
+                      image: hit.image || g.image,
+                    };
+                  })
+                );
+              }
+              appliedFromBackend = true;
+            } else if (resp.status === 404 || resp.status === 405) {
+              backendAvailable = false;
+            }
+          } catch {
+            if (i === 0) backendAvailable = false;
+          }
+        }
+
+        // Static / offline fallback via Wikipedia CORS pageimages
+        if (!appliedFromBackend && !cancelled) {
+          const fallbackMap = new Map<string, { thumbnail: string; image: string }>();
+          await Promise.all(
+            batch.slice(0, 6).map(async (g) => {
+              try {
+                const cleanName = (g.name || '').replace(/(\(.*?\)|\[.*?\])/g, '').trim();
+                if (!cleanName) return;
+                const wikiRes = await fetch(
+                  `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
+                    `"${cleanName}" "board game"`
+                  )}&gsrlimit=2&prop=pageimages&pithumbsize=400&format=json&origin=*`,
+                  { signal: createTimeoutSignal(3500) }
+                ).catch(() => null);
+                if (wikiRes && wikiRes.ok) {
+                  const data = await wikiRes.json();
+                  const pages = Object.values(data.query?.pages || {}) as any[];
+                  const hitUrl = pages.find((p) => typeof p?.thumbnail?.source === 'string')?.thumbnail?.source;
+                  if (hitUrl) {
+                    fallbackMap.set(g.id, { thumbnail: hitUrl, image: hitUrl });
+                  }
+                }
+              } catch {
+                // ignore
+              }
+            })
+          );
+          if (fallbackMap.size > 0 && !cancelled) {
+            setAllGames((prev) =>
+              prev.map((g) => {
+                const hit = fallbackMap.get(g.id);
+                return hit ? { ...g, thumbnail: g.thumbnail || hit.thumbnail, image: g.image || hit.image } : g;
+              })
+            );
+          }
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [allGames, shelves]);
 
   // Multi-shelf actions
   const handleAddShelf = (name?: string | unknown, rows = 2, cols = 2) => {
@@ -958,7 +1065,10 @@ export default function App() {
     const totalUpdatedIds = new Set<string>();
 
     const applyWebResults = (
-      resultsMap: Map<string, { width: number; height: number; depth: number; source: string }>
+      resultsMap: Map<
+        string,
+        { width: number; height: number; depth: number; source: string; bggId?: number; thumbnail?: string; image?: string }
+      >
     ) => {
       if (resultsMap.size === 0) return;
       resultsMap.forEach((_v, id) => totalUpdatedIds.add(id));
@@ -969,9 +1079,12 @@ export default function App() {
           if (webResult) {
             return {
               ...g,
+              bggId: g.bggId || webResult.bggId,
               width: webResult.width,
               height: webResult.height,
               depth: webResult.depth,
+              thumbnail: g.thumbnail || webResult.thumbnail,
+              image: g.image || webResult.image,
               dimensionSource: webResult.source || 'Ricerca Web',
               description: g.description
                 ? `${g.description}\n[Dimensioni reali trovate in rete: ${webResult.width}×${webResult.height}×${webResult.depth} cm (${webResult.source})]`
@@ -1211,6 +1324,8 @@ export default function App() {
           onUpdateGrid={handleUpdateGrid}
           viewMode={viewMode}
           onToggleViewMode={() => setViewMode((prev) => (prev === '3d' ? '2d' : '3d'))}
+          showBoxColors={showBoxColors}
+          onToggleBoxColors={() => setShowBoxColors((prev) => !prev)}
           shelves={shelves}
           activeShelfId={activeShelf.id}
           onSelectShelf={handleSelectShelf}
@@ -1262,6 +1377,8 @@ export default function App() {
           onMoveToCube={handleMoveToCube}
           onReorderBoxes={handleReorderBoxes}
           onEditGame={(g) => setEditingGame(g)}
+          showBoxColors={showBoxColors}
+          onToggleBoxColors={() => setShowBoxColors((prev) => !prev)}
         />
       )}
 

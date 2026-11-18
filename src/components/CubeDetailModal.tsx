@@ -16,6 +16,7 @@ import {
   checkPlacementAnomalies,
 } from '../utils/kallaxMath';
 import { computeBoxLabelStyle } from '../utils/boxLabelStyle';
+import { resolveBoxCoverUrl, shouldShowBoxCoverImage } from '../utils/boxCover';
 import {
   Box2D,
   resolveCollisionsAndClamp,
@@ -44,6 +45,7 @@ import {
   Lock,
   Unlock,
   Search,
+  Palette,
 } from 'lucide-react';
 import { CubeOccupancyBar } from './CubeOccupancyBar';
 
@@ -62,6 +64,8 @@ interface CubeDetailModalProps {
   onMoveToCube: (placedId: string, targetRow: number, targetCol: number) => void;
   onReorderBoxes: (newBoxes: PlacedBox[]) => void;
   onEditGame: (game: GameBox) => void;
+  showBoxColors?: boolean;
+  onToggleBoxColors?: () => void;
 }
 
 export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
@@ -79,12 +83,26 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
   onMoveToCube,
   onReorderBoxes,
   onEditGame,
+  showBoxColors: showBoxColorsProp,
+  onToggleBoxColors,
 }) => {
   const [selectedGameToAdd, setSelectedGameToAdd] = useState<string>('');
   const [addGameSearch, setAddGameSearch] = useState<string>('');
   const [addOrientation, setAddOrientation] = useState<ShelfOrientation | 'auto'>('auto');
   const [transferBoxId, setTransferBoxId] = useState<string | null>(null);
   const [modalAlert, setModalAlert] = useState<{ type: 'error' | 'success'; message: string } | null>(null);
+  const [localShowBoxColors, setLocalShowBoxColors] = useState<boolean>(false);
+  const [failedCoverUrls, setFailedCoverUrls] = useState<Set<string>>(() => new Set());
+
+  const effectiveShowBoxColors =
+    showBoxColorsProp !== undefined ? showBoxColorsProp : localShowBoxColors;
+  const handleToggleColors = () => {
+    if (onToggleBoxColors) {
+      onToggleBoxColors();
+    } else {
+      setLocalShowBoxColors((prev) => !prev);
+    }
+  };
 
   React.useEffect(() => {
     if (!modalAlert || modalAlert.type !== 'success') return;
@@ -615,33 +633,58 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                 <span>Organizzazione Manuale e Impilamento Libero</span>
               </span>
               
-              {/* Pulsante Lucchetto per Ordinamento Libero con Sovrapposizione */}
-              <button
-                type="button"
-                onClick={handleToggleFreeSortLock}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 border shadow-sm cursor-pointer ${
-                  isFreeSortUnlocked
-                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/60 hover:bg-amber-500/30 ring-1 ring-amber-500/40'
-                    : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-white hover:bg-slate-800'
-                }`}
-                title={
-                  isFreeSortUnlocked
-                    ? 'Lucchetto aperto: puoi spostare e sovrapporre liberamente le scatole. Clicca per bloccare e affiancare in automatico senza spazi.'
-                    : 'Lucchetto chiuso: clicca per sbloccare e riordinare liberamente le scatole anche sovrapponendole.'
-                }
-              >
-                {isFreeSortUnlocked ? (
-                  <>
-                    <Unlock className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-                    <span>Lucchetto Aperto (Riordina)</span>
-                  </>
-                ) : (
-                  <>
-                    <Lock className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Lucchetto Chiuso (Bloccato)</span>
-                  </>
-                )}
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleToggleColors}
+                  aria-pressed={effectiveShowBoxColors}
+                  aria-label={
+                    effectiveShowBoxColors
+                      ? 'Disattiva colori scatole'
+                      : 'Attiva colori scatole'
+                  }
+                  title={
+                    effectiveShowBoxColors
+                      ? 'Colori scatole attivi · Tocca per mostrare le immagini online'
+                      : 'Immagini scatole attive · Tocca per attivare i colori delle scatole'
+                  }
+                  className={`p-1.5 rounded-lg text-[11px] font-semibold transition-all flex items-center justify-center border shadow-sm cursor-pointer ${
+                    effectiveShowBoxColors
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/60 hover:bg-amber-500/30'
+                      : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-white hover:bg-slate-800'
+                  }`}
+                >
+                  <Palette className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Pulsante Lucchetto per Ordinamento Libero con Sovrapposizione */}
+                <button
+                  type="button"
+                  onClick={handleToggleFreeSortLock}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1.5 border shadow-sm cursor-pointer ${
+                    isFreeSortUnlocked
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/60 hover:bg-amber-500/30 ring-1 ring-amber-500/40'
+                      : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title={
+                    isFreeSortUnlocked
+                      ? 'Lucchetto aperto: puoi spostare e sovrapporre liberamente le scatole. Clicca per bloccare e affiancare in automatico senza spazi.'
+                      : 'Lucchetto chiuso: clicca per sbloccare e riordinare liberamente le scatole anche sovrapponendole.'
+                  }
+                >
+                  {isFreeSortUnlocked ? (
+                    <>
+                      <Unlock className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                      <span>Lucchetto Aperto (Riordina)</span>
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Lucchetto Chiuso (Bloccato)</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             {/* Hint sotto il pulsante */}
@@ -713,6 +756,16 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                     const bottomPct = (posCmY / config.cubeHeight) * 100;
                     const widthPct = (boxW / config.cubeWidth) * 100;
                     const heightPct = (boxH / config.cubeHeight) * 100;
+                    const primaryCover = resolveBoxCoverUrl(game, false);
+                    const fallbackCover = resolveBoxCoverUrl(game, true);
+                    const activeCoverUrl =
+                      primaryCover && !failedCoverUrls.has(primaryCover)
+                        ? primaryCover
+                        : fallbackCover && !failedCoverUrls.has(fallbackCover)
+                        ? fallbackCover
+                        : undefined;
+                    const hasCoverImage = shouldShowBoxCoverImage(effectiveShowBoxColors, activeCoverUrl);
+
                     const labelStyle = computeBoxLabelStyle({
                       widthPct,
                       heightPct,
@@ -736,7 +789,7 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                             : 'hover:brightness-105 z-10 hover:shadow-lg'
                         }`}
                         style={{
-                          backgroundColor: game.color || '#3B82F6',
+                          backgroundColor: hasCoverImage ? '#0f172a' : game.color || '#3B82F6',
                           left: `${leftPct}%`,
                           bottom: `${bottomPct}%`,
                           width: `${widthPct}%`,
@@ -745,9 +798,36 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                             '2px 4px 10px rgba(0,0,0,0.6), inset 1px 1px 1px rgba(255,255,255,0.3), inset -1px -1px 2px rgba(0,0,0,0.5)',
                         }}
                       >
+                        {/* Online Box Cover Artwork when box colors are deactivated */}
+                        {hasCoverImage && activeCoverUrl && (
+                          <div className="absolute inset-0 rounded overflow-hidden pointer-events-none select-none">
+                            <img
+                              src={activeCoverUrl}
+                              alt={game.name}
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover"
+                              onError={() => {
+                                setFailedCoverUrls((prev) => {
+                                  const next = new Set(prev);
+                                  next.add(activeCoverUrl);
+                                  return next;
+                                });
+                              }}
+                            />
+                            <div
+                              className={`absolute inset-0 ${
+                                placed.orientation === 'frontal'
+                                  ? 'bg-gradient-to-t from-black/75 via-black/25 to-black/45'
+                                  : 'bg-gradient-to-b from-black/55 via-black/35 to-black/65'
+                              }`}
+                            />
+                          </div>
+                        )}
+
                         {/* Title text */}
                         <div
-                          className={`w-full h-full flex items-center justify-center overflow-hidden text-white font-bold pointer-events-none select-none ${
+                          className={`relative z-10 w-full h-full flex items-center justify-center overflow-hidden text-white font-bold pointer-events-none select-none ${
                             placed.orientation === 'vertical'
                               ? `[writing-mode:vertical-rl] ${
                                   placed.rotation90 === 180 || placed.rotation90 === 270 ? 'rotate-0' : 'rotate-180'
@@ -760,7 +840,9 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                             fontSize: `${labelStyle.fontSizePx}px`,
                             lineHeight: labelStyle.lineHeight,
                             padding: `${labelStyle.paddingPx}px`,
-                            textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+                            textShadow: hasCoverImage
+                              ? '0 1px 3px rgba(0,0,0,0.95), 0 0 6px rgba(0,0,0,0.85)'
+                              : '0 1px 3px rgba(0,0,0,0.9)',
                           }}
                         >
                           <span className="truncate max-w-full drop-shadow">

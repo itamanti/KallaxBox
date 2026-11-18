@@ -20,6 +20,7 @@ import {
   parseGeminiJsonDimensions,
   isGeminiRateLimitError,
 } from './src/utils/dimensionSearch.ts';
+import { isAllowedProxyImageHost } from './src/utils/boxCover.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -228,8 +229,8 @@ async function fetchGeekdoGameDetails(
       }
     }
 
-    const rawThumb = item.images?.thumb || item.images?.square200 || item.imageurl || '';
-    const rawImg = item.images?.original || item.images?.square200 || rawThumb;
+    const rawThumb = item.images?.previewthumb || item.images?.thumb || item.images?.square200 || item.imageurl || '';
+    const rawImg = item.images?.original || item.images?.previewthumb || item.images?.square200 || rawThumb;
     const ratingVal = parseFloat(item.stats?.average);
     const weightVal = parseFloat(item.stats?.avgweight);
 
@@ -254,6 +255,112 @@ async function fetchGeekdoGameDetails(
   } catch {
     return null;
   }
+}
+
+interface CoverImageResult {
+  bggId?: number;
+  thumbnail: string;
+  image: string;
+}
+
+const coverImagesCache = new Map<string, { result: CoverImageResult | null; expiresAt: number }>();
+
+async function fetchOnlineCoverImages(
+  gameName: string,
+  bggId?: number
+): Promise<CoverImageResult | null> {
+  const cleanName = (gameName || '').replace(/(\(.*?\)|\[.*?\])/g, '').trim();
+  if ((!bggId || bggId <= 0) && !cleanName) return null;
+
+  const cacheKey = `${bggId && bggId > 0 ? bggId : 0}:${normalizeGameName(cleanName)}`;
+  const cached = coverImagesCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.result;
+  }
+
+  let resolvedBggId = bggId && bggId > 0 ? bggId : undefined;
+  if (!resolvedBggId && cleanName) {
+    const local = lookupBoardGameInfo({ name: cleanName });
+    if (local.found && local.bggId) {
+      resolvedBggId = local.bggId;
+    } else {
+      const resolvedIds = await resolveBggIdsFromWeb(cleanName);
+      if (resolvedIds[0]) resolvedBggId = resolvedIds[0];
+    }
+  }
+
+  if (resolvedBggId && resolvedBggId > 0) {
+    try {
+      const itemResp = await fetch(
+        `https://api.geekdo.com/api/geekitems?objectid=${resolvedBggId}&objecttype=thing`,
+        {
+          headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
+          signal: AbortSignal.timeout(3500),
+        }
+      ).catch(() => null);
+
+      if (itemResp && itemResp.ok) {
+        const itemData = await itemResp.json();
+        const item = itemData?.item;
+        const thumb =
+          item?.images?.previewthumb ||
+          item?.images?.thumb ||
+          item?.images?.square200 ||
+          item?.imageurl ||
+          '';
+        const img =
+          item?.images?.original ||
+          item?.images?.previewthumb ||
+          item?.images?.square200 ||
+          thumb;
+        if (thumb || img) {
+          const hit: CoverImageResult = {
+            bggId: resolvedBggId,
+            thumbnail: thumb || img,
+            image: img || thumb,
+          };
+          coverImagesCache.set(cacheKey, { result: hit, expiresAt: Date.now() + 24 * 60 * 60_000 });
+          return hit;
+        }
+      }
+    } catch {
+      // Fall through to Wikipedia pageimages fallback
+    }
+  }
+
+  // Fallback: Wikipedia pageimages (free, fast, no key)
+  if (cleanName) {
+    try {
+      const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
+        `"${cleanName}" "board game"`
+      )}&gsrlimit=2&prop=pageimages&pithumbsize=400&format=json`;
+      const resp = await fetch(wikiUrl, {
+        headers: { 'User-Agent': WIKI_UA, Accept: 'application/json' },
+        signal: AbortSignal.timeout(2500),
+      }).catch(() => null);
+      if (resp && resp.ok) {
+        const data = await resp.json();
+        const pages = Object.values(data.query?.pages || {}) as any[];
+        for (const p of pages) {
+          const src = p?.thumbnail?.source;
+          if (typeof src === 'string' && src.startsWith('https://')) {
+            const hit: CoverImageResult = {
+              bggId: resolvedBggId,
+              thumbnail: src,
+              image: src,
+            };
+            coverImagesCache.set(cacheKey, { result: hit, expiresAt: Date.now() + 6 * 60 * 60_000 });
+            return hit;
+          }
+        }
+      }
+    } catch {
+      // Ignore fallback error
+    }
+  }
+
+  coverImagesCache.set(cacheKey, { result: null, expiresAt: Date.now() + 10 * 60_000 });
+  return null;
 }
 
 // Search games via local catalog, BGG XMLAPI2 (if token present), and Wikidata/Wikipedia -> Geekdo
@@ -383,6 +490,17 @@ app.get('/api/bgg/search', async (req: Request, res: Response) => {
   }
 
   if (combined.length > 0) {
+    await Promise.all(
+      combined.slice(0, 6).map(async (item) => {
+        if (!item.thumbnail && item.bggId > 0) {
+          const cover = await fetchOnlineCoverImages(item.name, item.bggId);
+          if (cover) {
+            item.thumbnail = cover.thumbnail;
+            item.image = cover.image;
+          }
+        }
+      })
+    );
     return res.json({ results: combined });
   }
 
@@ -763,6 +881,7 @@ app.post('/api/games/batch-web-dimensions', async (req: Request, res: Response) 
 
         const local = lookupBoardGameInfo({ bggId, name: gName });
         if (local.found) {
+          const cover = !local.thumbnail ? await fetchOnlineCoverImages(gName, local.bggId) : null;
           return {
             id: g.id,
             name: gName,
@@ -770,6 +889,8 @@ app.post('/api/games/batch-web-dimensions', async (req: Request, res: Response) 
             width: local.width,
             height: local.height,
             depth: local.depth,
+            thumbnail: local.thumbnail || cover?.thumbnail || undefined,
+            image: local.image || cover?.image || undefined,
             foundOnWeb: true,
             source: 'BGG / Catalogo',
           };
@@ -777,15 +898,20 @@ app.post('/api/games/batch-web-dimensions', async (req: Request, res: Response) 
 
         if (onlineSearchesCount < MAX_ONLINE_SEARCHES) {
           onlineSearchesCount++;
-          const webDims = await searchWebBoxDimensions(gName, bggId, year);
+          const [webDims, cover] = await Promise.all([
+            searchWebBoxDimensions(gName, bggId, year),
+            fetchOnlineCoverImages(gName, bggId),
+          ]);
           if (webDims) {
             return {
               id: g.id,
               name: gName,
-              bggId: webDims.bggId || bggId,
+              bggId: webDims.bggId || cover?.bggId || bggId,
               width: webDims.width,
               height: webDims.height,
               depth: webDims.depth,
+              thumbnail: cover?.thumbnail || undefined,
+              image: cover?.image || undefined,
               foundOnWeb: true,
               source: webDims.source,
             };
@@ -821,6 +947,89 @@ app.post('/api/games/batch-web-dimensions', async (req: Request, res: Response) 
   return res.json({ results });
 });
 
+// Batch online cover image lookup for existing / imported shelf & library boxes
+app.post('/api/games/batch-covers', async (req: Request, res: Response) => {
+  const games = Array.isArray(req.body.games) ? req.body.games : [];
+  if (games.length === 0) {
+    return res.json({ results: [] });
+  }
+
+  const results: Array<{ id: string; bggId?: number; thumbnail?: string; image?: string }> = [];
+  const chunkSize = 6;
+  const capped = games.slice(0, 60);
+
+  for (let i = 0; i < capped.length; i += chunkSize) {
+    const chunk = capped.slice(i, i + chunkSize);
+    const chunkResults = await Promise.all(
+      chunk.map(async (g: any) => {
+        try {
+          const gName = (g.name || '').trim();
+          const rawBggId = g.bggId ? parseInt(String(g.bggId), 10) : undefined;
+          const bggId = rawBggId && rawBggId > 0 ? rawBggId : undefined;
+          const cover = await fetchOnlineCoverImages(gName, bggId);
+          return {
+            id: String(g.id || ''),
+            bggId: cover?.bggId || bggId,
+            thumbnail: cover?.thumbnail || undefined,
+            image: cover?.image || undefined,
+          };
+        } catch {
+          return { id: String(g.id || '') };
+        }
+      })
+    );
+    results.push(...chunkResults);
+  }
+
+  return res.json({ results });
+});
+
+// CORS-safe image proxy for rendering online box art inside 3D WebGL canvas textures
+app.get('/api/image-proxy', async (req: Request, res: Response) => {
+  const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+  if (!rawUrl) {
+    return res.status(400).send('Missing url');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return res.status(400).send('Invalid url');
+  }
+
+  if (parsed.protocol !== 'https:' || !isAllowedProxyImageHost(parsed.hostname)) {
+    return res.status(403).send('Host not allowed');
+  }
+
+  try {
+    const upstream = await fetch(parsed.toString(), {
+      headers: {
+        'User-Agent': BROWSER_UA,
+        Accept: 'image/avif,image/webp,image/png,image/jpeg,image/*,*/*;q=0.8',
+      },
+      signal: AbortSignal.timeout(7000),
+    });
+
+    if (!upstream.ok) {
+      return res.status(upstream.status).send('Upstream error');
+    }
+
+    const contentType = upstream.headers.get('content-type') || 'image/jpeg';
+    if (!contentType.startsWith('image/')) {
+      return res.status(415).send('Not an image');
+    }
+
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(buf);
+  } catch {
+    return res.status(504).send('Image fetch timeout');
+  }
+});
+
 // Fetch detailed game info and real box dimensions
 app.get('/api/bgg/game/:id', async (req: Request, res: Response) => {
   const bggIdParam = req.params.id;
@@ -833,11 +1042,15 @@ app.get('/api/bgg/game/:id', async (req: Request, res: Response) => {
   const catalogLookup = lookupBoardGameInfo({ bggId: numericId > 0 ? numericId : undefined, name: nameQuery });
 
   if (catalogLookup.found) {
+    const cover =
+      !catalogLookup.thumbnail && (catalogLookup.bggId || catalogLookup.name)
+        ? await fetchOnlineCoverImages(catalogLookup.name, catalogLookup.bggId)
+        : null;
     return res.json({
       bggId: catalogLookup.bggId,
       name: catalogLookup.name,
-      thumbnail: catalogLookup.thumbnail || '',
-      image: catalogLookup.image || '',
+      thumbnail: catalogLookup.thumbnail || cover?.thumbnail || '',
+      image: catalogLookup.image || cover?.image || '',
       year: catalogLookup.year,
       minPlayers: catalogLookup.minPlayers,
       maxPlayers: catalogLookup.maxPlayers,
@@ -1033,11 +1246,14 @@ app.get('/api/bgg/lookup-by-name', async (req: Request, res: Response) => {
 
   const info = lookupBoardGameInfo({ name: query });
   if (info.found) {
+    const cover = !info.thumbnail
+      ? await fetchOnlineCoverImages(info.name, info.bggId)
+      : null;
     return res.json({
       bggId: info.bggId,
       name: info.name,
-      thumbnail: info.thumbnail || '',
-      image: info.image || '',
+      thumbnail: info.thumbnail || cover?.thumbnail || '',
+      image: info.image || cover?.image || '',
       year: info.year || new Date().getFullYear(),
       minPlayers: info.minPlayers || 1,
       maxPlayers: info.maxPlayers || 4,

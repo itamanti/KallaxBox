@@ -12,6 +12,7 @@ import {
   canGameFitInCube,
 } from '../utils/kallaxMath';
 import { computeBoxLabelStyle } from '../utils/boxLabelStyle';
+import { resolveBoxCoverUrl, shouldShowBoxCoverImage } from '../utils/boxCover';
 import {
   Box2D,
   resolveCollisionsAndClamp,
@@ -62,6 +63,8 @@ interface KallaxCubeViewProps {
   onHoverTargetCube?: (target: { row: number; col: number; canFit: boolean } | null) => void;
   isPinching?: boolean;
   suppressTapAfterPinchRef?: React.RefObject<number>;
+  showOrientationSymbols?: boolean;
+  showBoxColors?: boolean;
   viewMode: '2d' | '3d';
 }
 
@@ -92,10 +95,13 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
   onHoverTargetCube,
   isPinching = false,
   suppressTapAfterPinchRef,
+  showOrientationSymbols = true,
+  showBoxColors = false,
   viewMode,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [transferBoxId, setTransferBoxId] = useState<string | null>(null);
+  const [failedCoverUrls, setFailedCoverUrls] = useState<Set<string>>(() => new Set());
   const [isInfoOpen, setIsInfoOpen] = useState(false);
   const [isInfoPinned, setIsInfoPinned] = useState(false);
   const infoHoldTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -680,6 +686,16 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
     const bottomPct = (posCmY / config.cubeHeight) * 100;
 
     const boxBg = game.color || '#3B82F6';
+    const primaryCover = resolveBoxCoverUrl(game, false);
+    const fallbackCover = resolveBoxCoverUrl(game, true);
+    const activeCoverUrl =
+      primaryCover && !failedCoverUrls.has(primaryCover)
+        ? primaryCover
+        : fallbackCover && !failedCoverUrls.has(fallbackCover)
+        ? fallbackCover
+        : undefined;
+    const hasCoverImage = shouldShowBoxCoverImage(showBoxColors, activeCoverUrl);
+
     const labelStyle = computeBoxLabelStyle({
       widthPct,
       heightPct,
@@ -690,6 +706,7 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
     return (
       <div
         key={placed.id}
+        data-box-display-mode={hasCoverImage ? 'cover' : 'color'}
         draggable={!isFreeSortUnlocked && !isCoarsePointer && !hasUsedTouch}
         onTouchStart={() => {
           if (!hasUsedTouch) setHasUsedTouch(true);
@@ -729,7 +746,7 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
             : 'hover:brightness-110 z-10 hover:shadow-lg'
         }`}
         style={{
-          backgroundColor: boxBg,
+          backgroundColor: hasCoverImage ? '#0f172a' : boxBg,
           left: `${leftPct}%`,
           bottom: `${bottomPct}%`,
           width: `${widthPct}%`,
@@ -744,9 +761,36 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
               : '1px 2px 4px rgba(0,0,0,0.3)',
         }}
       >
+        {/* Online Box Cover Artwork when box colors are deactivated */}
+        {hasCoverImage && activeCoverUrl && (
+          <div className="absolute inset-0 rounded overflow-hidden pointer-events-none select-none">
+            <img
+              src={activeCoverUrl}
+              alt={game.name}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              className="w-full h-full object-cover"
+              onError={() => {
+                setFailedCoverUrls((prev) => {
+                  const next = new Set(prev);
+                  next.add(activeCoverUrl);
+                  return next;
+                });
+              }}
+            />
+            <div
+              className={`absolute inset-0 ${
+                placed.orientation === 'frontal'
+                  ? 'bg-gradient-to-t from-black/75 via-black/25 to-black/45'
+                  : 'bg-gradient-to-b from-black/55 via-black/35 to-black/65'
+              }`}
+            />
+          </div>
+        )}
+
         {/* Spine or Box Label with visible rotation response */}
         <div
-          className={`w-full h-full flex items-center justify-center overflow-hidden text-white font-semibold select-none pointer-events-none ${
+          className={`relative z-10 w-full h-full flex items-center justify-center overflow-hidden text-white font-semibold select-none pointer-events-none ${
             placed.orientation === 'vertical'
               ? `[writing-mode:vertical-rl] ${
                   placed.rotation90 === 180 || placed.rotation90 === 270 ? 'rotate-0' : 'rotate-180'
@@ -759,7 +803,9 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
             fontSize: `${labelStyle.fontSizePx}px`,
             lineHeight: labelStyle.lineHeight,
             padding: `${labelStyle.paddingPx}px`,
-            textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+            textShadow: hasCoverImage
+              ? '0 1px 3px rgba(0,0,0,0.95), 0 0 6px rgba(0,0,0,0.85)'
+              : '0 1px 2px rgba(0,0,0,0.8)',
           }}
         >
           <span className="truncate max-w-full drop-shadow">
@@ -767,25 +813,27 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
           </span>
         </div>
 
-        {/* 90-degree Rotation Button (right) - Always visible on touch/mobile and prominent on hover */}
-        <button
-          onPointerDown={(e) => e.stopPropagation()}
-          onTouchStart={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onRotateBox(placed.id, e);
-          }}
-          title={`Orientamento: ${placed.orientation} (${placed.rotation90}°). Clicca per ruotare`}
-          className={`absolute top-1 right-1 w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-slate-950/90 text-amber-400 border border-amber-400/80 flex items-center justify-center transition-all hover:scale-115 hover:bg-amber-500 hover:text-slate-950 shadow-md z-30 cursor-pointer ${
-            isSelected
-              ? 'opacity-100 ring-2 ring-amber-400 scale-110'
-              : 'opacity-85 sm:opacity-0 group-hover/box:opacity-100'
-          }`}
-          aria-label={`Ruota 90 gradi ${game.name}`}
-        >
-          <RotateCw className="w-2 h-2" />
-        </button>
+        {/* 90-degree Rotation / Orientation Symbol (right) - Toggleable via Eye button near zoom */}
+        {showOrientationSymbols && (
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRotateBox(placed.id, e);
+            }}
+            title={`Orientamento: ${placed.orientation} (${placed.rotation90}°). Clicca per ruotare`}
+            className={`absolute top-1 right-1 w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-slate-950/90 text-amber-400 border border-amber-400/80 flex items-center justify-center transition-all hover:scale-115 hover:bg-amber-500 hover:text-slate-950 shadow-md z-30 cursor-pointer ${
+              isSelected
+                ? 'opacity-100 ring-2 ring-amber-400 scale-110'
+                : 'opacity-85 sm:opacity-0 group-hover/box:opacity-100'
+            }`}
+            aria-label={`Ruota 90 gradi ${game.name}`}
+          >
+            <RotateCw className="w-2 h-2" />
+          </button>
+        )}
 
         {/* Floating Action Bar when Box is selected ("solo icone per ruota e sposta. mentre per l'orientamento fisico mettili tutti") */}
         {isSelected && (

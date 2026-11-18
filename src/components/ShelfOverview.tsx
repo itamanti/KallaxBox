@@ -18,6 +18,7 @@ import {
   computeShelfFitLayout,
   computePinchZoomAndScroll,
 } from '../utils/shelfZoom';
+import { resolveBoxCoverUrl, shouldShowBoxCoverImage } from '../utils/boxCover';
 import {
   SlidersHorizontal,
   Grid,
@@ -25,6 +26,7 @@ import {
   Layers,
   RotateCw,
   Eye,
+  EyeOff,
   Check,
   Plus,
   Minus,
@@ -40,6 +42,7 @@ import {
   Pencil,
   PackageOpen,
   RotateCcw,
+  Palette,
 } from 'lucide-react';
 
 interface ShelfOverviewProps {
@@ -65,6 +68,8 @@ interface ShelfOverviewProps {
   onUpdateGrid?: (rows: number, cols: number) => void;
   viewMode: '2d' | '3d';
   onToggleViewMode: () => void;
+  showBoxColors?: boolean;
+  onToggleBoxColors?: () => void;
   shelves?: ShelfUnit[];
   activeShelfId?: string;
   onSelectShelf?: (shelfId: string) => void;
@@ -116,6 +121,8 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
   onUpdateGrid,
   viewMode,
   onToggleViewMode,
+  showBoxColors: showBoxColorsProp,
+  onToggleBoxColors,
   shelves,
   activeShelfId,
   onSelectShelf,
@@ -164,6 +171,33 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
   const [userZoom, setUserZoom] = useState<number>(1);
   const [isPinching, setIsPinching] = useState<boolean>(false);
   const suppressTapAfterPinchRef = useRef<number>(0);
+  const [showOrientationSymbols, setShowOrientationSymbols] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('kallaxbox_show_orientation_symbols');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('kallaxbox_show_orientation_symbols', String(showOrientationSymbols));
+    } catch {
+      // ignore
+    }
+  }, [showOrientationSymbols]);
+
+  const [localShowBoxColors, setLocalShowBoxColors] = useState<boolean>(false);
+  const effectiveShowBoxColors =
+    showBoxColorsProp !== undefined ? showBoxColorsProp : localShowBoxColors;
+  const handleToggleBoxColors = () => {
+    if (onToggleBoxColors) {
+      onToggleBoxColors();
+    } else {
+      setLocalShowBoxColors((prev) => !prev);
+    }
+  };
 
   const isDesktopViewport = viewportWidth >= 640;
   const { naturalShelfWidth, fitScale } = computeShelfFitLayout({
@@ -628,12 +662,28 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
           {/* Row 1: Box Icon + Full-Width Horizontal Game Name + Close Button */}
           <div className="flex items-start justify-between gap-2.5">
             <div className="flex items-start gap-2.5 min-w-0 flex-1">
-              <div
-                className="w-9 h-9 rounded-lg flex items-center justify-center font-bold text-white text-xs shrink-0 shadow mt-0.5"
-                style={{ backgroundColor: selectedGame.color || '#3B82F6' }}
-              >
-                <BoxIcon className="w-5 h-5 drop-shadow" />
-              </div>
+              {(() => {
+                const selectedCover = resolveBoxCoverUrl(selectedGame);
+                const useCover = shouldShowBoxCoverImage(effectiveShowBoxColors, selectedCover);
+                return (
+                  <div
+                    className="w-9 h-9 rounded-lg flex items-center justify-center font-bold text-white text-xs shrink-0 shadow mt-0.5 relative overflow-hidden border border-white/15"
+                    style={{ backgroundColor: selectedGame.color || '#3B82F6' }}
+                  >
+                    <BoxIcon className="w-5 h-5 drop-shadow" />
+                    {useCover && selectedCover && (
+                      <img
+                        src={selectedCover}
+                        alt={selectedGame.name}
+                        className="absolute inset-0 w-full h-full object-cover"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    )}
+                  </div>
+                );
+              })()}
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-bold text-white leading-snug break-words">
                   {selectedGame.name}
@@ -796,6 +846,8 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
             onSelectBox={onSelectBox}
             onOpenCubeDetail={onOpenCubeDetail}
             onRotateBox={(placedId) => onRotateBox(placedId)}
+            showBoxColors={effectiveShowBoxColors}
+            onToggleBoxColors={handleToggleBoxColors}
           />
         </div>
       ) : (
@@ -814,43 +866,93 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
               </span>
             </div>
 
-            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Eye Toggle Button for Box Orientation Symbols */}
               <button
                 type="button"
-                onClick={() => handleButtonZoom('out')}
-                disabled={userZoom <= MIN_SHELF_ZOOM}
-                className="w-8 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-slate-200 hover:text-amber-300 border border-slate-800 flex items-center justify-center transition-all cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
-                title="Rimpicciolisci visuale (-)"
-                aria-label="Rimpicciolisci visuale"
-              >
-                <Minus className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleButtonZoom('reset')}
-                className={`px-2.5 h-7 rounded-lg text-[11px] font-mono font-bold transition-all flex items-center gap-1 cursor-pointer ${
-                  userZoom === 1
-                    ? 'text-slate-300 bg-slate-900/50'
-                    : 'text-amber-300 bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25'
+                onClick={() => setShowOrientationSymbols((prev) => !prev)}
+                aria-pressed={showOrientationSymbols}
+                aria-label={
+                  showOrientationSymbols
+                    ? 'Nascondi simboli orientamento scatole'
+                    : 'Mostra simboli orientamento scatole'
+                }
+                title={
+                  showOrientationSymbols
+                    ? 'Nascondi simboli orientamento sulle scatole'
+                    : 'Mostra simboli orientamento sulle scatole'
+                }
+                className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl border flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+                  showOrientationSymbols
+                    ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 hover:bg-amber-500/30'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900'
                 }`}
-                title="Ripristina zoom adattato allo schermo (100%)"
-                aria-label="Adatta visuale allo schermo"
               >
-                <span>{Math.round(userZoom * 100)}%</span>
-                {userZoom !== 1 && <RotateCcw className="w-3 h-3" />}
+                {showOrientationSymbols ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
               </button>
 
+              {/* Palette Toggle Button for Box Colors vs Online Cover Images */}
               <button
                 type="button"
-                onClick={() => handleButtonZoom('in')}
-                disabled={userZoom >= MAX_SHELF_ZOOM}
-                className="w-8 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-slate-200 hover:text-amber-300 border border-slate-800 flex items-center justify-center transition-all cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
-                title="Ingrandisci visuale (+)"
-                aria-label="Ingrandisci visuale"
+                onClick={handleToggleBoxColors}
+                aria-pressed={effectiveShowBoxColors}
+                aria-label={
+                  effectiveShowBoxColors
+                    ? 'Disattiva colori scatole'
+                    : 'Attiva colori scatole'
+                }
+                title={
+                  effectiveShowBoxColors
+                    ? 'Colori scatole attivi · Tocca per mostrare le immagini online'
+                    : 'Immagini scatole attive · Tocca per attivare i colori delle scatole'
+                }
+                className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl border flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+                  effectiveShowBoxColors
+                    ? 'bg-amber-500/20 border-amber-500/60 text-amber-300 hover:bg-amber-500/30'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900'
+                }`}
               >
-                <Plus className="w-3.5 h-3.5" />
+                <Palette className="w-4 h-4" />
               </button>
+
+              <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleButtonZoom('out')}
+                  disabled={userZoom <= MIN_SHELF_ZOOM}
+                  className="w-8 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-slate-200 hover:text-amber-300 border border-slate-800 flex items-center justify-center transition-all cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
+                  title="Rimpicciolisci visuale (-)"
+                  aria-label="Rimpicciolisci visuale"
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleButtonZoom('reset')}
+                  className={`px-2.5 h-7 rounded-lg text-[11px] font-mono font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                    userZoom === 1
+                      ? 'text-slate-300 bg-slate-900/50'
+                      : 'text-amber-300 bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25'
+                  }`}
+                  title="Ripristina zoom adattato allo schermo (100%)"
+                  aria-label="Adatta visuale allo schermo"
+                >
+                  <span>{Math.round(userZoom * 100)}%</span>
+                  {userZoom !== 1 && <RotateCcw className="w-3 h-3" />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleButtonZoom('in')}
+                  disabled={userZoom >= MAX_SHELF_ZOOM}
+                  className="w-8 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-slate-200 hover:text-amber-300 border border-slate-800 flex items-center justify-center transition-all cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
+                  title="Ingrandisci visuale (+)"
+                  aria-label="Ingrandisci visuale"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -929,6 +1031,8 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
                           onHoverTargetCube={setPointerTargetCube}
                           isPinching={isPinching}
                           suppressTapAfterPinchRef={suppressTapAfterPinchRef}
+                          showOrientationSymbols={showOrientationSymbols}
+                          showBoxColors={effectiveShowBoxColors}
                           viewMode={viewMode}
                         />
                       );
