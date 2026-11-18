@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   GameBox,
   PlacedBox,
@@ -55,6 +56,9 @@ interface KallaxCubeViewProps {
   isFreeSortUnlocked?: boolean;
   isDimmed?: boolean;
   onSetFreeSortUnlocked?: (unlocked: boolean) => void;
+  isPointerDropTarget?: boolean;
+  pointerDropCanFit?: boolean;
+  onHoverTargetCube?: (target: { row: number; col: number; canFit: boolean } | null) => void;
   viewMode: '2d' | '3d';
 }
 
@@ -80,6 +84,9 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
   isFreeSortUnlocked: isFreeSortUnlockedProp,
   isDimmed = false,
   onSetFreeSortUnlocked,
+  isPointerDropTarget = false,
+  pointerDropCanFit = true,
+  onHoverTargetCube,
   viewMode,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
@@ -139,15 +146,41 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
     }
   };
 
-  // 2D Interactive Physics & Drag-and-Drop state inside this cube
+  // Detect coarse touch devices so HTML5 draggable doesn't hijack touch drags
+  const [isCoarsePointer] = useState<boolean>(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(pointer: coarse)').matches
+      : false
+  );
+  const [hasUsedTouch, setHasUsedTouch] = useState(false);
+
+  // 2D Interactive Physics & Cross-Cube Pointer Drag-and-Drop state
   const interiorContainerRef = React.useRef<HTMLDivElement | null>(null);
+  const capturedElRef = React.useRef<HTMLElement | null>(null);
+  const suppressClickRef = React.useRef(false);
   const [draggingPlacedId, setDraggingPlacedId] = useState<string | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
-  const dragStartPointerRef = React.useRef<{ pointerX: number; pointerY: number; boxCmX: number; boxCmY: number }>({
+  const [floatingCrossDrag, setFloatingCrossDrag] = useState<{
+    clientX: number;
+    clientY: number;
+    gameName: string;
+    color: string;
+    targetRow: number | null;
+    targetCol: number | null;
+    canFit: boolean;
+  } | null>(null);
+  const dragStartPointerRef = React.useRef<{
+    pointerX: number;
+    pointerY: number;
+    boxCmX: number;
+    boxCmY: number;
+    hasMoved: boolean;
+  }>({
     pointerX: 0,
     pointerY: 0,
     boxCmX: 0,
     boxCmY: 0,
+    hasMoved: false,
   });
 
   const space = calculateCubeSpace(
@@ -160,7 +193,15 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
 
   // Calculate current 2D box representations in cm for all placed boxes in this cube
   const current2DBoxes = React.useMemo<Box2D[]>(() => {
-    const horizBoxes = placedBoxes.filter((p) => p.orientation === 'horizontal');
+    const defaultHorizBoxes = placedBoxes.filter(
+      (p) => p.orientation === 'horizontal' && (p.posX === undefined || p.posY === undefined)
+    );
+    const sortedHoriz = [...defaultHorizBoxes].sort((a, b) => a.order - b.order);
+    const nonHoriz = placedBoxes
+      .filter((p) => !(p.orientation === 'horizontal' && (p.posX === undefined || p.posY === undefined)))
+      .filter((p) => p.posX === undefined || p.posY === undefined)
+      .sort((a, b) => a.order - b.order);
+
     const rawBoxes: Box2D[] = placedBoxes.map((placed) => {
       const game = gamesMap[placed.gameId];
       const eff = game
@@ -173,7 +214,6 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
       if (x === undefined || y === undefined) {
         if (placed.orientation === 'horizontal') {
           let accumulatedY = 0;
-          const sortedHoriz = [...horizBoxes].sort((a, b) => a.order - b.order);
           for (const h of sortedHoriz) {
             if (h.id === placed.id) break;
             const hg = gamesMap[h.gameId];
@@ -186,9 +226,9 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
           y = accumulatedY;
         } else {
           let accumulatedX = 0;
-          if (horizBoxes.length > 0) {
+          if (defaultHorizBoxes.length > 0) {
             let maxHW = 0;
-            for (const h of horizBoxes) {
+            for (const h of defaultHorizBoxes) {
               const hg = gamesMap[h.gameId];
               if (hg) {
                 const he = getEffectiveDimensions(hg, h.orientation, h.rotation90);
@@ -197,7 +237,6 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
             }
             accumulatedX = maxHW;
           }
-          const nonHoriz = placedBoxes.filter((p) => p.orientation !== 'horizontal').sort((a, b) => a.order - b.order);
           for (const nh of nonHoriz) {
             if (nh.id === placed.id) break;
             const nhGame = gamesMap[nh.gameId];
@@ -291,20 +330,25 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
 
   // Pointer Down on box inside KallaxCubeView
   const handleBoxPointerDown = (e: React.PointerEvent<HTMLDivElement>, placed: PlacedBox) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (!interiorContainerRef.current) return;
     const currentBox2D = current2DBoxes.find((b) => b.id === placed.id);
     if (!currentBox2D) return;
 
     setDraggingPlacedId(placed.id);
     setDragPos({ x: currentBox2D.x, y: currentBox2D.y });
+    setFloatingCrossDrag(null);
+    suppressClickRef.current = false;
 
     dragStartPointerRef.current = {
       pointerX: e.clientX,
       pointerY: e.clientY,
       boxCmX: currentBox2D.x,
       boxCmY: currentBox2D.y,
+      hasMoved: false,
     };
 
+    capturedElRef.current = e.currentTarget as HTMLElement;
     try {
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
@@ -312,14 +356,112 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
     }
   };
 
-  // Pointer Move on shelf compartment
+  // Evaluate whether a dragged box fits in a candidate target cube
+  const checkTargetCubeFit = (placedId: string, targetRow: number, targetCol: number): boolean => {
+    const draggedPlaced = placedBoxes.find((p) => p.id === placedId);
+    if (!draggedPlaced) return true;
+    const game = gamesMap[draggedPlaced.gameId];
+    if (!game) return true;
+    const pool = allPlacedBoxes || placedBoxes;
+    const targetBoxes = pool.filter(
+      (p) => p.cubeRow === targetRow && p.cubeCol === targetCol && p.id !== placedId
+    );
+    let fit = canGameFitInCube(
+      config.cubeWidth,
+      config.cubeHeight,
+      config.cubeDepth,
+      targetBoxes,
+      game,
+      gamesMap,
+      draggedPlaced.orientation,
+      draggedPlaced.rotation90,
+      false
+    );
+    if (!fit.canFit) {
+      fit = canGameFitInCube(
+        config.cubeWidth,
+        config.cubeHeight,
+        config.cubeDepth,
+        targetBoxes,
+        game,
+        gamesMap,
+        undefined,
+        undefined,
+        false
+      );
+    }
+    return fit.canFit;
+  };
+
+  // Pointer Move on shelf compartment (supports both in-cube and cross-cube smartphone drags)
   const handleShelfPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!draggingPlacedId || !interiorContainerRef.current) return;
 
     const targetBox2D = current2DBoxes.find((b) => b.id === draggingPlacedId);
     if (!targetBox2D) return;
 
+    const moveDist = Math.hypot(
+      e.clientX - dragStartPointerRef.current.pointerX,
+      e.clientY - dragStartPointerRef.current.pointerY
+    );
+    if (!dragStartPointerRef.current.hasMoved && moveDist < 6) {
+      return;
+    }
+    dragStartPointerRef.current.hasMoved = true;
+    suppressClickRef.current = true;
+
     const rect = interiorContainerRef.current.getBoundingClientRect();
+    const draggedPlaced = placedBoxes.find((p) => p.id === draggingPlacedId);
+    const draggedGame = draggedPlaced ? gamesMap[draggedPlaced.gameId] : undefined;
+
+    // Detect if pointer moved outside source cube or onto another cube
+    const isOutsideSourceInterior =
+      e.clientX < rect.left ||
+      e.clientX > rect.right ||
+      e.clientY < rect.top ||
+      e.clientY > rect.bottom;
+
+    if (isOutsideSourceInterior && onMoveBoxToCube) {
+      const elementsUnder = document.elementsFromPoint(e.clientX, e.clientY);
+      const targetCard = elementsUnder.find((el) => {
+        const tr = el.getAttribute('data-cube-card-row');
+        const tc = el.getAttribute('data-cube-card-col');
+        return tr !== null && tc !== null && (Number(tr) !== row || Number(tc) !== col);
+      }) as HTMLElement | undefined;
+
+      if (targetCard) {
+        const targetRow = Number(targetCard.getAttribute('data-cube-card-row'));
+        const targetCol = Number(targetCard.getAttribute('data-cube-card-col'));
+        const canFit = checkTargetCubeFit(draggingPlacedId, targetRow, targetCol);
+        setFloatingCrossDrag({
+          clientX: e.clientX,
+          clientY: e.clientY,
+          gameName: draggedGame?.name || 'Scatola',
+          color: draggedGame?.color || '#3B82F6',
+          targetRow,
+          targetCol,
+          canFit,
+        });
+        onHoverTargetCube?.({ row: targetRow, col: targetCol, canFit });
+        return;
+      }
+
+      setFloatingCrossDrag({
+        clientX: e.clientX,
+        clientY: e.clientY,
+        gameName: draggedGame?.name || 'Scatola',
+        color: draggedGame?.color || '#3B82F6',
+        targetRow: null,
+        targetCol: null,
+        canFit: true,
+      });
+      onHoverTargetCube?.(null);
+      return;
+    }
+
+    setFloatingCrossDrag(null);
+    onHoverTargetCube?.(null);
+
     const pxPerCmX = rect.width / config.cubeWidth;
     const pxPerCmY = rect.height / config.cubeHeight;
 
@@ -354,30 +496,63 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
     setDragPos({ x: resolved.x, y: resolved.y });
   };
 
-  // Pointer Up / Drop on shelf compartment
+  const resetPointerDragState = (pointerId?: number) => {
+    if (capturedElRef.current && pointerId !== undefined) {
+      try {
+        if (capturedElRef.current.hasPointerCapture(pointerId)) {
+          capturedElRef.current.releasePointerCapture(pointerId);
+        }
+      } catch {
+        // Ignore
+      }
+    }
+    capturedElRef.current = null;
+    setDraggingPlacedId(null);
+    setDragPos(null);
+    setFloatingCrossDrag(null);
+    onHoverTargetCube?.(null);
+  };
+
+  // Pointer Cancel (e.g., browser native HTML5 drag takeover on desktop mouse or scroll interrupt)
+  const handleShelfPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggingPlacedId) return;
+    resetPointerDragState(e.pointerId);
+  };
+
+  // Pointer Up / Drop on shelf compartment (supports both in-cube and cross-cube smartphone drags)
   const handleShelfPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!draggingPlacedId) return;
 
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // Ignore
+    const currentBox2D = current2DBoxes.find((b) => b.id === draggingPlacedId);
+    const activePlacedId = draggingPlacedId;
+    const hasMoved = dragStartPointerRef.current.hasMoved;
+    const activeDragPos = dragPos;
+
+    if (hasMoved) {
+      suppressClickRef.current = true;
+      setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 120);
     }
 
-    const currentBox2D = current2DBoxes.find((b) => b.id === draggingPlacedId);
+    resetPointerDragState(e.pointerId);
 
-    // Check if pointer was released over a DIFFERENT cube (e.g. dragging between unlocked cubes)
-    if (isFreeSortUnlocked && currentBox2D && onMoveBoxToCube) {
+    // If pointer didn't move beyond tap threshold, leave selection to onClick
+    if (!hasMoved) return;
+
+    // Check if pointer was released over a DIFFERENT cube (works whether padlocks are locked or unlocked!)
+    if (currentBox2D && onMoveBoxToCube) {
       const elementsUnder = document.elementsFromPoint(e.clientX, e.clientY);
-      const targetInterior = elementsUnder.find((el) => {
-        const tr = el.getAttribute('data-cube-row');
-        const tc = el.getAttribute('data-cube-col');
+      const targetCard = elementsUnder.find((el) => {
+        const tr = el.getAttribute('data-cube-card-row');
+        const tc = el.getAttribute('data-cube-card-col');
         return tr !== null && tc !== null && (Number(tr) !== row || Number(tc) !== col);
       }) as HTMLElement | undefined;
 
-      if (targetInterior) {
-        const targetRow = Number(targetInterior.getAttribute('data-cube-row'));
-        const targetCol = Number(targetInterior.getAttribute('data-cube-col'));
+      if (targetCard) {
+        const targetRow = Number(targetCard.getAttribute('data-cube-card-row'));
+        const targetCol = Number(targetCard.getAttribute('data-cube-card-col'));
+        const targetInterior = (targetCard.querySelector('[data-cube-row]') as HTMLElement | null) || targetCard;
         const tRect = targetInterior.getBoundingClientRect();
         const dropX = clampToShelf(
           {
@@ -387,30 +562,28 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
           },
           { width: config.cubeWidth, height: config.cubeHeight }
         );
-        onMoveBoxToCube(draggingPlacedId, targetRow, targetCol, Math.round(dropX.x * 10) / 10, Math.round(dropX.y * 10) / 10);
-        setDraggingPlacedId(null);
-        setDragPos(null);
+        onMoveBoxToCube(activePlacedId, targetRow, targetCol, Math.round(dropX.x * 10) / 10, Math.round(dropX.y * 10) / 10);
         return;
       }
     }
 
-    if (dragPos && currentBox2D && onUpdatePlacement) {
+    if (activeDragPos && currentBox2D && onUpdatePlacement) {
       if (isFreeSortUnlocked) {
         // Modalità libera con lucchetto aperto: salva direttamente la posizione senza respingere
         const clamped = clampToShelf(
-          { ...currentBox2D, x: dragPos.x, y: dragPos.y },
+          { ...currentBox2D, x: activeDragPos.x, y: activeDragPos.y },
           { width: config.cubeWidth, height: config.cubeHeight }
         );
-        onUpdatePlacement(draggingPlacedId, {
+        onUpdatePlacement(activePlacedId, {
           posX: Math.round(clamped.x * 10) / 10,
           posY: Math.round(clamped.y * 10) / 10,
           lastMovedAt: Date.now(),
         });
       } else {
-        const otherBoxes = current2DBoxes.filter((b) => b.id !== draggingPlacedId);
+        const otherBoxes = current2DBoxes.filter((b) => b.id !== activePlacedId);
         // Try snapping to shelf floor or top of box beneath
         const snapped = snapToSupportOrFloor(
-          { ...currentBox2D, x: dragPos.x, y: dragPos.y },
+          { ...currentBox2D, x: activeDragPos.x, y: activeDragPos.y },
           otherBoxes
         );
 
@@ -422,16 +595,13 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
         );
 
         // Save position to placement
-        onUpdatePlacement(draggingPlacedId, {
+        onUpdatePlacement(activePlacedId, {
           posX: finalResolved.x,
           posY: finalResolved.y,
           lastMovedAt: Date.now(),
         });
       }
     }
-
-    setDraggingPlacedId(null);
-    setDragPos(null);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -501,9 +671,13 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
     return (
       <div
         key={placed.id}
-        draggable={!isFreeSortUnlocked}
+        draggable={!isFreeSortUnlocked && !isCoarsePointer && !hasUsedTouch}
+        onTouchStart={() => {
+          if (!hasUsedTouch) setHasUsedTouch(true);
+        }}
+        onContextMenu={(e) => e.preventDefault()}
         onDragStart={(e) => {
-          if (isFreeSortUnlocked) {
+          if (isFreeSortUnlocked || isCoarsePointer || hasUsedTouch) {
             e.preventDefault();
             return;
           }
@@ -519,9 +693,10 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
         }}
         onPointerMove={handleShelfPointerMove}
         onPointerUp={handleShelfPointerUp}
-        onPointerCancel={handleShelfPointerUp}
+        onPointerCancel={handleShelfPointerCancel}
         onClick={(e) => {
           e.stopPropagation();
+          if (suppressClickRef.current) return;
           onSelectBox(isSelected ? null : placed.id);
         }}
         className={`group/box absolute transition-[transform,box-shadow] cursor-grab active:cursor-grabbing rounded shrink-0 flex items-center justify-center select-none shadow-md ${
@@ -541,6 +716,8 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
           height: `${heightPct}%`,
           zIndex: isDragging ? 50 : isSelected ? 40 : isFreeSortUnlocked ? (placed.lastMovedAt ? 30 : 20) : 10,
           touchAction: 'none',
+          WebkitUserSelect: 'none',
+          WebkitTouchCallout: 'none',
           boxShadow:
             viewMode === '3d'
               ? '2px 4px 10px rgba(0,0,0,0.5), inset 1px 1px 1px rgba(255,255,255,0.25), inset -1px -1px 2px rgba(0,0,0,0.4)'
@@ -774,11 +951,17 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
 
   return (
     <div
+      data-cube-card-row={row}
+      data-cube-card-col={col}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={`relative group rounded-[4px] sm:rounded-md transition-all duration-300 border-2 aspect-square w-full min-h-[160px] sm:min-h-[200px] flex flex-col overflow-hidden select-none ${shelfBgClass} ${
-        isFreeSortUnlocked
+        isPointerDropTarget
+          ? pointerDropCanFit
+            ? 'ring-4 ring-emerald-400 border-emerald-400 bg-emerald-500/20 scale-[1.02] z-30 shadow-2xl'
+            : 'ring-4 ring-red-500 border-red-500 bg-red-500/20 scale-[1.01] z-30 shadow-2xl'
+          : isFreeSortUnlocked
           ? 'ring-4 ring-amber-400 border-amber-400 bg-amber-500/15 shadow-2xl shadow-amber-500/30 brightness-110 z-20'
           : isDimmed
           ? 'opacity-35 brightness-50 contrast-85 filter grayscale-[20%] transition-all duration-300 pointer-events-auto'
@@ -1004,8 +1187,9 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
         data-cube-col={col}
         onPointerMove={handleShelfPointerMove}
         onPointerUp={handleShelfPointerUp}
-        onPointerCancel={handleShelfPointerUp}
+        onPointerCancel={handleShelfPointerCancel}
         onClick={() => {
+          if (suppressClickRef.current) return;
           if (!isFreeSortUnlocked) onOpenCubeDetail(row, col);
         }}
         className="relative flex-1 w-full min-h-0 flex items-end justify-start cursor-pointer overflow-hidden p-0 touch-none select-none"
@@ -1065,6 +1249,46 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
           placedBoxes.map((placed) => renderBox(placed))
         )}
       </div>
+
+      {/* Floating Cross-Cube Drag Preview Badge for Smartphone & Touch */}
+      {floatingCrossDrag && typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed pointer-events-none z-50 -translate-x-1/2 -translate-y-full -mt-3 flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-950/95 border-2 shadow-2xl backdrop-blur-md text-xs font-bold text-white whitespace-nowrap"
+            style={{
+              left: `${floatingCrossDrag.clientX}px`,
+              top: `${floatingCrossDrag.clientY}px`,
+              borderColor:
+                floatingCrossDrag.targetRow !== null
+                  ? floatingCrossDrag.canFit
+                    ? '#34D399'
+                    : '#EF4444'
+                  : '#FBBF24',
+            }}
+          >
+            <span
+              className="w-3 h-3 rounded-sm shrink-0 border border-white/30"
+              style={{ backgroundColor: floatingCrossDrag.color }}
+            />
+            <span className="max-w-[140px] truncate">{floatingCrossDrag.gameName}</span>
+            {floatingCrossDrag.targetRow !== null && floatingCrossDrag.targetCol !== null ? (
+              <span
+                className={`px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                  floatingCrossDrag.canFit
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    : 'bg-red-500/20 text-red-300 border border-red-500/40'
+                }`}
+              >
+                {floatingCrossDrag.canFit
+                  ? `→ Vano ${floatingCrossDrag.targetRow + 1},${floatingCrossDrag.targetCol + 1}`
+                  : `Pieno ${floatingCrossDrag.targetRow + 1},${floatingCrossDrag.targetCol + 1}`}
+              </span>
+            ) : (
+              <span className="text-[10px] text-amber-300 font-medium">Trascina su un vano</span>
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

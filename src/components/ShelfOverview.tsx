@@ -143,6 +143,7 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
 
   // Traccia quali vani hanno il lucchetto aperto: se ce ne sono, gli altri con il lucchetto chiuso vengono resi meno luminosi
   const [unlockedCubeKeys, setUnlockedCubeKeys] = useState<Set<string>>(new Set());
+  const [pointerTargetCube, setPointerTargetCube] = useState<{ row: number; col: number; canFit: boolean } | null>(null);
 
   const handleSetCubeUnlocked = (r: number, c: number, unlocked: boolean) => {
     const key = `${r}-${c}`;
@@ -623,6 +624,9 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
                       isFreeSortUnlocked={isUnlocked}
                       isDimmed={isDimmed}
                       onSetFreeSortUnlocked={(unlocked) => handleSetCubeUnlocked(r, c, unlocked)}
+                      isPointerDropTarget={pointerTargetCube?.row === r && pointerTargetCube?.col === c}
+                      pointerDropCanFit={pointerTargetCube?.canFit ?? true}
+                      onHoverTargetCube={setPointerTargetCube}
                       viewMode={viewMode}
                     />
                   );
