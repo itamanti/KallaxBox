@@ -1062,9 +1062,21 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
           </span>
         </div>
 
-        {/* Quick Action Buttons / Icons (Padlock, Info !, Expand) */}
+        {/* Quick Action Buttons / Icons (Affianca when unlocked, Padlock, Info !, Expand) */}
         <div className="flex items-center gap-0.5 pointer-events-auto shrink-0">
-          {space.boxCount > 0 && (
+          {isFreeSortUnlocked && (
+            <button
+              type="button"
+              onClick={handleToggleFreeSortLock}
+              title="Blocca lucchetto e affianca senza spazi"
+              aria-label="Affianca"
+              className="px-1 sm:px-1.5 py-[1.5px] sm:py-[2px] rounded bg-amber-500 hover:bg-amber-400 text-slate-950 border border-amber-300 text-[7px] sm:text-[8.5px] font-bold leading-none transition-colors cursor-pointer flex items-center gap-0.5 shadow-sm whitespace-nowrap shrink-0"
+            >
+              <span>Affianca</span>
+            </button>
+          )}
+
+          {(space.boxCount > 0 || isFreeSortUnlocked) && (
             <button
               type="button"
               onClick={handleToggleFreeSortLock}
@@ -1266,27 +1278,6 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
               : 'rgba(0,0,0,0.18)',
         }}
       >
-        {/* Free Sort Active Mode Overlay Banner */}
-        {isFreeSortUnlocked && (
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="absolute top-1 left-1 right-1 flex items-center justify-between gap-1 px-2 py-1 bg-amber-500 text-slate-950 rounded text-[10px] font-bold shadow-lg z-30 animate-in fade-in"
-          >
-            <div className="flex items-center gap-1 min-w-0">
-              <Unlock className="w-3.5 h-3.5 shrink-0 text-slate-950 animate-pulse" />
-              <span className="truncate">Lucchetto aperto: ordina</span>
-            </div>
-            <button
-              type="button"
-              onClick={handleToggleFreeSortLock}
-              className="px-2 py-0.5 rounded bg-slate-950 text-amber-300 hover:bg-slate-900 text-[9px] font-bold shrink-0 transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
-              title="Blocca lucchetto e affianca senza spazi"
-            >
-              <Lock className="w-2.5 h-2.5" />
-              <span>Affianca</span>
-            </button>
-          </div>
-        )}
         {/* Overflow Warning Pill */}
         {space.isOverflowing && (
           <div className="absolute top-1 left-1.5 right-1.5 flex items-center gap-1 text-[10px] text-red-200 bg-red-950/90 border border-red-500/50 rounded px-1.5 py-0.5 z-25 animate-pulse shadow pointer-events-none">
