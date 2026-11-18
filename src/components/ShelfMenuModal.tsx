@@ -28,7 +28,7 @@ interface ShelfMenuModalProps {
   onUpdateConfig: (newConfig: KallaxConfig) => void;
   placedBoxes: PlacedBox[];
   gamesMap: Record<string, GameBox>;
-  onAutoOptimizeAll: () => void;
+  onAutoOptimizeAll?: () => void;
   onClearShelf?: () => void;
   onClearAllShelves?: () => void;
   shelvesCount: number;
@@ -456,29 +456,6 @@ export const ShelfMenuModal: React.FC<ShelfMenuModalProps> = ({
           {/* TAB 3: AZIONI SCAFFALE */}
           {activeTab === 'actions' && (
             <div className="space-y-3">
-              {/* Auto-optimize All */}
-              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">
-                <div>
-                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                    <Sparkles className="w-4 h-4 text-amber-400" />
-                    Auto-ottimizza Tutti i Vani
-                  </h4>
-                  <p className="text-[11px] text-slate-400">
-                    Dispone automaticamente le scatole nell'orientamento più compatto per massimizzare lo spazio residuo.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onAutoOptimizeAll();
-                    onClose();
-                  }}
-                  className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition-all shadow-sm shrink-0 cursor-pointer"
-                >
-                  Ottimizza
-                </button>
-              </div>
-
               {/* Clear Active Shelf */}
               {onClearShelf && placedBoxes.length > 0 && (
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3">

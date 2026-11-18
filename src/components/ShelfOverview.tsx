@@ -11,7 +11,6 @@ import { Kallax3DScene } from './Kallax3DScene';
 import { canGameFitInCube } from '../utils/kallaxMath';
 import { countPlacedBoxesAcrossShelves } from '../utils/shelfActions';
 import {
-  Sparkles,
   SlidersHorizontal,
   Grid,
   Box as BoxIcon,
@@ -45,8 +44,8 @@ interface ShelfOverviewProps {
   onRotateBox: (placedId: string, e?: React.MouseEvent) => void;
   onToggleOrientation?: (placedId: string, e?: React.MouseEvent) => void;
   onSetOrientation?: (placedId: string, orientation: ShelfOrientation, e?: React.MouseEvent) => void;
-  onAutoOptimizeCube: (row: number, col: number, e?: React.MouseEvent) => void;
-  onAutoOptimizeAll: () => void;
+  onAutoOptimizeCube?: (row: number, col: number, e?: React.MouseEvent) => void;
+  onAutoOptimizeAll?: () => void;
   onDropGame: (gameId: string, row: number, col: number) => void;
   onMoveBoxToCube?: (placedId: string, targetRow: number, targetCol: number) => void;
   onUpdatePlacement?: (placedId: string, updates: Partial<PlacedBox>) => void;
@@ -330,7 +329,7 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
           </div>
         </div>
 
-        {/* Right: 2D/3D View Switch + Auto-ottimizza + Dedicated Shelf Menu */}
+        {/* Right: 2D/3D View Switch + Clear Shelves + Dedicated Shelf Menu */}
         <div className="flex flex-wrap items-center gap-2">
           {/* 2D / 3D Segmented Switch */}
           <div className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 shadow-sm">
@@ -365,17 +364,6 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
               <span>Vista 3D</span>
             </button>
           </div>
-
-          {/* Auto-Optimize All Cubes */}
-          <button
-            onClick={onAutoOptimizeAll}
-            className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"
-            title="Ottimizza orientamento scatole su tutti i vani per massimizzare lo spazio"
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Auto-ottimizza</span>
-            <span className="sm:hidden">Ottimizza</span>
-          </button>
 
           {/* Empty Shelves (keeps library intact) */}
           {onClearAllShelves && (

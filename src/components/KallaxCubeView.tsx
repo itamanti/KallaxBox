@@ -21,9 +21,9 @@ import {
 } from '../utils/kallaxPhysics';
 import {
   RotateCw,
-  Sparkles,
   Maximize2,
   AlertTriangle,
+  AlertCircle,
   MoveVertical,
   Layers,
   Eye,
@@ -46,7 +46,7 @@ interface KallaxCubeViewProps {
   onRotateBox: (placedId: string, e: React.MouseEvent) => void;
   onToggleOrientation?: (placedId: string, e: React.MouseEvent) => void;
   onSetOrientation?: (placedId: string, orientation: ShelfOrientation, e: React.MouseEvent) => void;
-  onAutoOptimizeCube: (row: number, col: number, e: React.MouseEvent) => void;
+  onAutoOptimizeCube?: (row: number, col: number, e: React.MouseEvent) => void;
   onDropGame: (gameId: string, row: number, col: number) => void;
   onMoveBoxToCube?: (placedId: string, targetRow: number, targetCol: number) => void;
   onUpdatePlacement?: (placedId: string, updates: Partial<PlacedBox>) => void;
@@ -84,6 +84,48 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [transferBoxId, setTransferBoxId] = useState<string | null>(null);
+  const [isInfoOpen, setIsInfoOpen] = useState(false);
+  const [isInfoPinned, setIsInfoPinned] = useState(false);
+  const infoHoldTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const infoOpenedByHoldRef = React.useRef(false);
+  const suppressInfoClickRef = React.useRef(false);
+  const infoAreaRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      if (infoHoldTimerRef.current) clearTimeout(infoHoldTimerRef.current);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!isInfoPinned && !isInfoOpen) return;
+    const handleGlobalRelease = () => {
+      if (infoHoldTimerRef.current) {
+        clearTimeout(infoHoldTimerRef.current);
+        infoHoldTimerRef.current = null;
+      }
+      if (infoOpenedByHoldRef.current) {
+        infoOpenedByHoldRef.current = false;
+        suppressInfoClickRef.current = true;
+        setIsInfoOpen(false);
+        setIsInfoPinned(false);
+      }
+    };
+    const handleOutsidePointerDown = (e: PointerEvent) => {
+      if (infoAreaRef.current && !infoAreaRef.current.contains(e.target as Node)) {
+        setIsInfoPinned(false);
+        setIsInfoOpen(false);
+      }
+    };
+    window.addEventListener('pointerup', handleGlobalRelease);
+    window.addEventListener('pointercancel', handleGlobalRelease);
+    document.addEventListener('pointerdown', handleOutsidePointerDown);
+    return () => {
+      window.removeEventListener('pointerup', handleGlobalRelease);
+      window.removeEventListener('pointercancel', handleGlobalRelease);
+      document.removeEventListener('pointerdown', handleOutsidePointerDown);
+    };
+  }, [isInfoPinned, isInfoOpen]);
 
   // Lucchetto modalità ordinamento libero: se sbloccato (aperto), permette di muovere le scatole anche sovrapponendole.
   // Cliccando sul lucchetto per chiuderlo, le scatole vengono riordinate e affiancate perfettamente senza lasciare spazi.
@@ -494,28 +536,6 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
           </span>
         </div>
 
-        {/* Quick Transfer Button (left) - visible when selected or hovered */}
-        {onMoveBoxToCube && (
-          <button
-            onPointerDown={(e) => e.stopPropagation()}
-            onTouchStart={(e) => e.stopPropagation()}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation();
-              setTransferBoxId(transferBoxId === placed.id ? null : placed.id);
-            }}
-            title={`Sposta "${game.name}" in un altro vano`}
-            className={`absolute top-1 left-1 w-5 h-5 rounded-full bg-slate-950/90 text-sky-400 border border-slate-700 flex items-center justify-center transition-all hover:scale-115 hover:bg-sky-500 hover:text-slate-950 shadow-md z-30 cursor-pointer ${
-              transferBoxId === placed.id || isSelected
-                ? 'opacity-100 ring-2 ring-sky-400'
-                : 'opacity-0 group-hover/box:opacity-100'
-            }`}
-            aria-label={`Sposta ${game.name} in un altro vano`}
-          >
-            <ArrowRightLeft className="w-2.5 h-2.5" />
-          </button>
-        )}
-
         {/* 90-degree Rotation Button (right) - Always visible on touch/mobile and prominent on hover */}
         <button
           onPointerDown={(e) => e.stopPropagation()}
@@ -526,23 +546,15 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
             onRotateBox(placed.id, e);
           }}
           title={`Orientamento: ${placed.orientation} (${placed.rotation90}°). Clicca per ruotare`}
-          className={`absolute top-1 right-1 w-5 h-5 rounded-full bg-slate-950/90 text-amber-400 border border-amber-400/80 flex items-center justify-center transition-all hover:scale-115 hover:bg-amber-500 hover:text-slate-950 shadow-md z-30 cursor-pointer ${
+          className={`absolute top-1 right-1 w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-slate-950/90 text-amber-400 border border-amber-400/80 flex items-center justify-center transition-all hover:scale-115 hover:bg-amber-500 hover:text-slate-950 shadow-md z-30 cursor-pointer ${
             isSelected
               ? 'opacity-100 ring-2 ring-amber-400 scale-110'
               : 'opacity-85 sm:opacity-0 group-hover/box:opacity-100'
           }`}
           aria-label={`Ruota 90 gradi ${game.name}`}
         >
-          <RotateCw className="w-2.5 h-2.5" />
+          <RotateCw className="w-2 h-2" />
         </button>
-
-        {/* Prominent rotation angle badge */}
-        {placed.rotation90 > 0 && (
-          <div className="absolute bottom-1 right-1 bg-slate-950/90 text-amber-300 border border-amber-400/60 rounded px-1 py-0.5 text-[8px] font-mono font-bold shadow-md pointer-events-none flex items-center gap-0.5 z-20">
-            <RotateCw className="w-2 h-2 text-amber-400" />
-            {placed.rotation90}°
-          </div>
-        )}
 
         {/* Floating Action Bar when Box is selected ("solo icone per ruota e sposta. mentre per l'orientamento fisico mettili tutti") */}
         {isSelected && (
@@ -745,28 +757,18 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
       }}
     >
       {/* Top Header Bar ("la parte sopra, dove ci sono le icone") */}
-      <div className="w-full px-2 py-1 sm:py-1.5 flex items-center justify-between gap-1 bg-slate-950/90 backdrop-blur-xs shrink-0 z-20">
-        <div className="flex items-center gap-1.5 pointer-events-auto">
-          <span className="text-[11px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-100 border border-white/20 shadow-sm">
+      <div
+        ref={infoAreaRef}
+        className="w-full px-1 sm:px-1.5 py-[2px] sm:py-0.5 flex items-center justify-between gap-1 bg-slate-950/90 backdrop-blur-xs shrink-0 z-30 relative"
+      >
+        <div className="flex items-center gap-0.5 sm:gap-1 pointer-events-auto min-w-0">
+          <span className="text-[7.5px] sm:text-[8.5px] font-sans font-bold tracking-tight px-1 py-[1px] leading-none rounded bg-slate-800 text-slate-100 border border-white/20 shadow-sm whitespace-nowrap shrink-0">
             {row + 1},{col + 1}
           </span>
-          {space.boxCount > 0 && (
-            <span
-              className={`text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded shadow-sm ${
-                space.volumePercent > 90 || space.isOverflowing
-                  ? 'bg-red-500/40 text-red-100 border border-red-500/60'
-                  : space.volumePercent > 70
-                  ? 'bg-amber-500/40 text-amber-100 border border-amber-500/60'
-                  : 'bg-emerald-500/40 text-emerald-100 border border-emerald-500/60'
-              }`}
-            >
-              {space.volumePercent}% vol
-            </span>
-          )}
         </div>
 
-        {/* Quick Action Buttons / Icons (Padlock, Auto-optimize, Expand) */}
-        <div className="flex items-center gap-1 pointer-events-auto">
+        {/* Quick Action Buttons / Icons (Padlock, Info !, Expand) */}
+        <div className="flex items-center gap-0.5 pointer-events-auto shrink-0">
           {space.boxCount > 0 && (
             <button
               type="button"
@@ -776,7 +778,7 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
                   ? 'Lucchetto aperto: puoi spostare e sovrapporre liberamente le scatole. Clicca per bloccare e affiancare in automatico senza spazi.'
                   : 'Lucchetto chiuso: clicca per sbloccare e riordinare liberamente le scatole anche sovrapponendole.'
               }
-              className={`p-1 rounded transition-all cursor-pointer shadow-sm border ${
+              className={`p-[2.5px] sm:p-[3px] rounded transition-all cursor-pointer shadow-sm border ${
                 isFreeSortUnlocked
                   ? 'bg-amber-500 text-slate-950 border-amber-400 ring-2 ring-amber-400 font-bold'
                   : 'bg-slate-800/90 hover:bg-slate-700 text-slate-200 border-white/10'
@@ -784,31 +786,173 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
               aria-label={isFreeSortUnlocked ? 'Blocca lucchetto e affianca senza spazi' : 'Sblocca lucchetto per riordinare'}
             >
               {isFreeSortUnlocked ? (
-                <Unlock className="w-3.5 h-3.5 text-slate-950 animate-pulse" />
+                <Unlock className="w-2 h-2 sm:w-2.5 sm:h-2.5 text-slate-950 animate-pulse" />
               ) : (
-                <Lock className="w-3.5 h-3.5 text-slate-300" />
+                <Lock className="w-2 h-2 sm:w-2.5 sm:h-2.5 text-slate-300" />
               )}
             </button>
           )}
-          {space.boxCount > 0 && (
-            <button
-              onClick={(e) => onAutoOptimizeCube(row, col, e)}
-              title="Ottimizza orientamento scatole per massimizzare lo spazio"
-              className="p-1 rounded bg-slate-800/90 hover:bg-amber-500 hover:text-slate-950 text-slate-200 transition-colors border border-white/10 shadow-sm cursor-pointer"
-              aria-label="Auto-ottimizza disposizione vano"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-            </button>
-          )}
+
+          {/* Exclamation Mark Info Button (hold on mobile / hover or click on desktop) */}
+          <button
+            type="button"
+            aria-label={`Info vano ${row + 1},${col + 1} (tieni premuto su smartphone)`}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              if (e.pointerType !== 'mouse') {
+                infoOpenedByHoldRef.current = false;
+                suppressInfoClickRef.current = false;
+                if (infoHoldTimerRef.current) clearTimeout(infoHoldTimerRef.current);
+                infoHoldTimerRef.current = setTimeout(() => {
+                  infoOpenedByHoldRef.current = true;
+                  setIsInfoOpen(true);
+                }, 160);
+              }
+            }}
+            onPointerUp={(e) => {
+              e.stopPropagation();
+              if (infoHoldTimerRef.current) {
+                clearTimeout(infoHoldTimerRef.current);
+                infoHoldTimerRef.current = null;
+              }
+              if (e.pointerType !== 'mouse' && infoOpenedByHoldRef.current) {
+                infoOpenedByHoldRef.current = false;
+                suppressInfoClickRef.current = true;
+                setIsInfoOpen(false);
+                setIsInfoPinned(false);
+              }
+            }}
+            onPointerCancel={(e) => {
+              e.stopPropagation();
+              if (infoHoldTimerRef.current) {
+                clearTimeout(infoHoldTimerRef.current);
+                infoHoldTimerRef.current = null;
+              }
+              if (infoOpenedByHoldRef.current) {
+                infoOpenedByHoldRef.current = false;
+                setIsInfoOpen(false);
+              }
+            }}
+            onMouseEnter={() => setIsInfoOpen(true)}
+            onMouseLeave={() => {
+              if (!isInfoPinned) setIsInfoOpen(false);
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (suppressInfoClickRef.current) {
+                suppressInfoClickRef.current = false;
+                return;
+              }
+              setIsInfoPinned((prev) => {
+                const next = !prev;
+                setIsInfoOpen(next);
+                return next;
+              });
+            }}
+            className={`p-[2.5px] sm:p-[3px] rounded transition-colors border shadow-sm cursor-pointer select-none touch-none ${
+              space.isOverflowing
+                ? 'bg-red-950/90 hover:bg-red-600 text-red-300 hover:text-white border-red-500/60'
+                : space.isDepthOverflow
+                ? 'bg-amber-950/90 hover:bg-amber-500 text-amber-300 hover:text-slate-950 border-amber-500/60'
+                : isInfoOpen
+                ? 'bg-amber-500 text-slate-950 border-amber-400'
+                : 'bg-slate-800/90 hover:bg-amber-500 hover:text-slate-950 text-amber-300 border-white/10'
+            }`}
+          >
+            <AlertCircle className="w-2 h-2 sm:w-2.5 sm:h-2.5" />
+          </button>
+
           <button
             onClick={() => onOpenCubeDetail(row, col)}
             title="Dettagli e gestione vano"
-            className="p-1 rounded bg-slate-800/90 hover:bg-white hover:text-slate-950 text-slate-200 transition-colors border border-white/10 shadow-sm cursor-pointer"
+            className="p-[2.5px] sm:p-[3px] rounded bg-slate-800/90 hover:bg-white hover:text-slate-950 text-slate-200 transition-colors border border-white/10 shadow-sm cursor-pointer"
             aria-label="Apri dettagli vano"
           >
-            <Maximize2 className="w-3.5 h-3.5" />
+            <Maximize2 className="w-2 h-2 sm:w-2.5 sm:h-2.5" />
           </button>
         </div>
+
+        {/* Info Popover shown on hold / hover / tap on the ! button */}
+        {isInfoOpen && (() => {
+          const horizRawPct = Math.max(0, Math.round((space.totalWidthUsed / config.cubeWidth) * 100));
+          const horizUsedPct = Math.min(100, horizRawPct);
+          const horizFreePct = Math.max(0, 100 - horizUsedPct);
+          const globalUsedPct = Math.min(100, Math.max(0, space.rawVolumePercent));
+          const globalFreePct = Math.max(0, 100 - globalUsedPct);
+
+          return (
+            <div
+              role="status"
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="absolute left-1 right-1 top-full mt-1 p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-slate-950/95 border border-amber-500/60 text-[7.5px] sm:text-[9.5px] text-slate-200 shadow-2xl backdrop-blur-md z-50 space-y-1.5 sm:space-y-2 pointer-events-auto animate-in fade-in zoom-in-95 duration-100"
+            >
+              {/* Horizontal Occupied / Free Bar */}
+              <div className="space-y-0.5 sm:space-y-1">
+                <div className="flex items-center justify-between gap-1 font-mono tracking-tighter sm:tracking-normal whitespace-nowrap">
+                  <span className="text-slate-300 font-semibold">
+                    <span className="sm:hidden">Orizz.</span>
+                    <span className="hidden sm:inline">Orizzontale</span>
+                  </span>
+                  <span>
+                    <span className={space.isWidthOverflow ? 'text-red-400 font-bold' : 'text-amber-300 font-bold'}>
+                      {horizRawPct}% occ.
+                    </span>
+                    <span className="text-slate-500"> · </span>
+                    <span className="text-emerald-300 font-semibold">{horizFreePct}% lib.</span>
+                  </span>
+                </div>
+                <div className="w-full h-1.5 sm:h-2.5 rounded-full bg-emerald-500/20 border border-white/10 overflow-hidden flex">
+                  {horizUsedPct > 0 && (
+                    <div
+                      className={`h-full transition-all ${
+                        space.isWidthOverflow
+                          ? 'bg-red-500'
+                          : horizUsedPct > 75
+                          ? 'bg-amber-400'
+                          : 'bg-sky-400'
+                      }`}
+                      style={{ width: `${horizUsedPct}%` }}
+                    />
+                  )}
+                </div>
+              </div>
+
+              {/* Global Compartment Volume Occupied / Free Bar */}
+              <div className="space-y-0.5 sm:space-y-1">
+                <div className="flex items-center justify-between gap-1 font-mono tracking-tighter sm:tracking-normal whitespace-nowrap">
+                  <span className="text-slate-300 font-semibold">
+                    <span className="sm:hidden">Globale</span>
+                    <span className="hidden sm:inline">Globale vano</span>
+                  </span>
+                  <span>
+                    <span className="text-amber-300 font-bold">{globalUsedPct}% occ.</span>
+                    <span className="text-slate-500"> · </span>
+                    <span className="text-emerald-300 font-semibold">{globalFreePct}% lib.</span>
+                  </span>
+                </div>
+                <div className="w-full h-1.5 sm:h-2.5 rounded-full bg-emerald-500/20 border border-white/10 overflow-hidden flex">
+                  {globalUsedPct > 0 && (
+                    <div
+                      className={`h-full transition-all ${
+                        space.isOverflowing
+                          ? 'bg-red-500'
+                          : globalUsedPct > 75
+                          ? 'bg-amber-400'
+                          : 'bg-amber-500'
+                      }`}
+                      style={{ width: `${globalUsedPct}%` }}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Dividing Line separating the top icon bar from the compartment shelf space */}
@@ -879,22 +1023,6 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
         ) : (
           placedBoxes.map((placed) => renderBox(placed))
         )}
-
-        {/* Bottom Floating Telemetry Overlay */}
-        <div className="absolute bottom-1 right-1.5 flex items-center gap-1.5 text-[9px] font-mono text-slate-300 bg-black/60 backdrop-blur-xs px-1.5 py-0.5 rounded border border-white/5 pointer-events-none z-15 shadow-sm">
-          <span>{space.boxCount === 0 ? '43.8L' : `${space.remainingVolumeLiters}L liberi`}</span>
-          {space.dominantLayout === 'vertical' && (
-            <span className="text-slate-400">· costa</span>
-          )}
-          {space.dominantLayout === 'horizontal' && (
-            <span className="text-slate-400">· pila</span>
-          )}
-          {space.isDepthOverflow && !space.isOverflowing && (
-            <span className="text-amber-300 font-semibold">
-              · sporge +{Math.round((space.maxDepthUsed - config.cubeDepth) * 10) / 10}cm
-            </span>
-          )}
-        </div>
       </div>
     </div>
   );

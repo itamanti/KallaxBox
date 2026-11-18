@@ -770,14 +770,6 @@ export const CubeDetailModal: React.FC<CubeDetailModalProps> = ({
                         >
                           <RotateCw className="w-3 h-3 text-amber-400" />
                         </button>
-
-                        {/* Miniature rotation badge */}
-                        {placed.rotation90 > 0 && (
-                          <div className="absolute bottom-0.5 right-0.5 bg-slate-950/90 text-amber-300 border border-amber-400/50 rounded px-1 py-0.2 text-[8px] font-mono font-bold shadow pointer-events-none flex items-center gap-0.5 z-20">
-                            <RotateCw className="w-2 h-2 text-amber-400" />
-                            {placed.rotation90}°
-                          </div>
-                        )}
                       </div>
                     );
                   })
