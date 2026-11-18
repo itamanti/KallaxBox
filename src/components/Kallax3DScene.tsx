@@ -178,24 +178,29 @@ export const Kallax3DScene: React.FC<Kallax3DSceneProps> = ({
       const center = new THREE.Vector3(0, totalH / 2, 0);
       controls.target.copy(center);
 
-      const distance = Math.max(totalW, totalH) * 2.15;
+      const vFovRad = (camera.fov * Math.PI) / 180;
+      const aspect = Math.max(0.45, camera.aspect || 1);
+      const hFovRad = 2 * Math.atan(Math.tan(vFovRad / 2) * aspect);
+      const distForH = (totalH * 0.55) / Math.tan(vFovRad / 2);
+      const distForW = (totalW * 0.58) / Math.tan(hFovRad / 2);
+      const distance = Math.max(distForH, distForW, Math.max(totalW, totalH) * 1.45);
 
       switch (preset) {
         case 'front':
-          camera.position.set(0, totalH / 2, distance * 1.15);
+          camera.position.set(0, totalH / 2, distance * 1.08);
           break;
         case 'top':
-          camera.position.set(0, totalH * 2.1, distance * 0.95);
+          camera.position.set(0, totalH * 1.85, distance * 0.95);
           break;
         case 'side':
-          camera.position.set(distance * 1.25, totalH / 2, distance * 0.4);
+          camera.position.set(distance * 1.15, totalH / 2, distance * 0.45);
           break;
         case 'isometric':
-          camera.position.set(distance * 0.9, totalH * 1.25, distance * 1.0);
+          camera.position.set(distance * 0.85, totalH * 1.15, distance * 0.95);
           break;
         case 'perspective':
         default:
-          camera.position.set(distance * 0.65, totalH * 0.95, distance * 1.15);
+          camera.position.set(distance * 0.52, totalH * 0.85, distance * 1.05);
           break;
       }
       camera.lookAt(center);
@@ -683,11 +688,11 @@ export const Kallax3DScene: React.FC<Kallax3DSceneProps> = ({
       />
 
       {/* Top HUD Badge: 3D Scene specs & interaction hints */}
-      <div className="absolute top-3 left-3 flex items-center gap-2 pointer-events-none z-10">
-        <div className="px-3 py-1.5 rounded-xl bg-slate-900/90 border border-white/10 text-xs font-mono font-bold text-white shadow-lg flex items-center gap-2 backdrop-blur-md">
-          <div className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-          <span>IKEA Kallax {config.rows}×{config.cols} (3D Reale)</span>
-          <span className="text-slate-400 font-normal">| {config.cubeWidth}×{config.cubeHeight}×{config.cubeDepth} cm</span>
+      <div className="absolute top-3 left-3 right-24 flex flex-wrap items-center gap-2 pointer-events-none z-10">
+        <div className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-900/90 border border-white/10 text-[11px] sm:text-xs font-mono font-bold text-white shadow-lg flex items-center gap-2 backdrop-blur-md max-w-full">
+          <div className="w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full bg-emerald-400 shrink-0" />
+          <span className="truncate">Kallax {config.rows}×{config.cols} (3D)</span>
+          <span className="hidden sm:inline text-slate-400 font-normal">| {config.cubeWidth}×{config.cubeHeight}×{config.cubeDepth} cm</span>
         </div>
 
         {hoveredBox && (
@@ -825,20 +830,22 @@ export const Kallax3DScene: React.FC<Kallax3DSceneProps> = ({
             {/* Zoom In / Out */}
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
               <button
-                onClick={() => handleZoom('in')}
-                className="p-1 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-                title="Ingrandisci (Zoom In)"
-                aria-label="Zoom avanti"
-              >
-                <ZoomIn className="w-3.5 h-3.5" />
-              </button>
-              <button
                 onClick={() => handleZoom('out')}
-                className="p-1 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-                title="Rimpicciolisci (Zoom Out)"
-                aria-label="Zoom indietro"
+                className="px-2 py-1 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer flex items-center gap-1 text-xs font-bold"
+                title="Rimpicciolisci (-)"
+                aria-label="Rimpicciolisci visuale 3D"
               >
                 <ZoomOut className="w-3.5 h-3.5" />
+                <span>−</span>
+              </button>
+              <button
+                onClick={() => handleZoom('in')}
+                className="px-2 py-1 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer flex items-center gap-1 text-xs font-bold"
+                title="Ingrandisci (+)"
+                aria-label="Ingrandisci visuale 3D"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+                <span>+</span>
               </button>
             </div>
 

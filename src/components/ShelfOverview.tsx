@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   GameBox,
   PlacedBox,
@@ -10,6 +10,14 @@ import { KallaxCubeView } from './KallaxCubeView';
 import { Kallax3DScene } from './Kallax3DScene';
 import { canGameFitInCube } from '../utils/kallaxMath';
 import { countPlacedBoxesAcrossShelves } from '../utils/shelfActions';
+import {
+  MIN_SHELF_ZOOM,
+  MAX_SHELF_ZOOM,
+  clampShelfZoom,
+  stepShelfZoom,
+  computeShelfFitLayout,
+  computePinchZoomAndScroll,
+} from '../utils/shelfZoom';
 import {
   SlidersHorizontal,
   Grid,
@@ -31,6 +39,7 @@ import {
   ChevronDown,
   Pencil,
   PackageOpen,
+  RotateCcw,
 } from 'lucide-react';
 
 interface ShelfOverviewProps {
@@ -145,6 +154,223 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
   const [unlockedCubeKeys, setUnlockedCubeKeys] = useState<Set<string>>(new Set());
   const [pointerTargetCube, setPointerTargetCube] = useState<{ row: number; col: number; canFit: boolean } | null>(null);
 
+  // Responsive fit-to-screen + 2-finger pinch & +/- zoom state for 2D Kallax
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const shelfFrameRef = useRef<HTMLDivElement | null>(null);
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window !== 'undefined' ? Math.max(280, window.innerWidth - 24) : 800
+  );
+  const [naturalShelfHeight, setNaturalShelfHeight] = useState<number>(360);
+  const [userZoom, setUserZoom] = useState<number>(1);
+  const [isPinching, setIsPinching] = useState<boolean>(false);
+  const suppressTapAfterPinchRef = useRef<number>(0);
+
+  const isDesktopViewport = viewportWidth >= 640;
+  const { naturalShelfWidth, fitScale } = computeShelfFitLayout({
+    viewportWidth,
+    cols: config.cols,
+    isDesktop: isDesktopViewport,
+  });
+  const effectiveScale = fitScale * userZoom;
+  const scaledWidth = Math.max(120, Math.round(naturalShelfWidth * effectiveScale));
+  const scaledHeight = Math.max(120, Math.round(naturalShelfHeight * effectiveScale));
+
+  const zoomStateRef = useRef({
+    userZoom,
+    effectiveScale,
+    fitScale,
+  });
+  zoomStateRef.current = { userZoom, effectiveScale, fitScale };
+
+  const pinchRef = useRef<{
+    active: boolean;
+    startDist: number;
+    startZoom: number;
+    startScale: number;
+    startScrollLeft: number;
+    startScrollTop: number;
+    startMidpointX: number;
+    startMidpointY: number;
+  } | null>(null);
+
+  // Reset zoom cleanly when switching shelves or resizing Kallax grid dimensions
+  useEffect(() => {
+    setUserZoom(1);
+    if (viewportRef.current) {
+      viewportRef.current.scrollLeft = 0;
+      viewportRef.current.scrollTop = 0;
+    }
+  }, [activeShelfId, config.rows, config.cols]);
+
+  // Observe container & shelf frame sizes
+  useEffect(() => {
+    if (viewMode !== '2d') return;
+    const vp = viewportRef.current;
+    const frame = shelfFrameRef.current;
+
+    const updateSizes = () => {
+      if (vp && vp.clientWidth > 0) {
+        setViewportWidth(vp.clientWidth);
+      }
+      if (frame && frame.offsetHeight > 0) {
+        setNaturalShelfHeight(frame.offsetHeight);
+      }
+    };
+
+    updateSizes();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateSizes);
+      return () => window.removeEventListener('resize', updateSizes);
+    }
+
+    const observer = new ResizeObserver(updateSizes);
+    if (vp) observer.observe(vp);
+    if (frame) observer.observe(frame);
+    return () => observer.disconnect();
+  }, [viewMode, config.rows, config.cols, naturalShelfWidth]);
+
+  // Two-finger pinch-to-zoom & trackpad Ctrl+Wheel zoom on 2D shelf viewport
+  useEffect(() => {
+    if (viewMode !== '2d') return;
+    const vp = viewportRef.current;
+    if (!vp) return;
+
+    const getTouchMetrics = (t1: Touch, t2: Touch) => {
+      const rect = vp.getBoundingClientRect();
+      const dist = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+      const midX = (t1.clientX + t2.clientX) / 2 - rect.left;
+      const midY = (t1.clientY + t2.clientY) / 2 - rect.top;
+      return { dist, midX, midY };
+    };
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        const { dist, midX, midY } = getTouchMetrics(e.touches[0], e.touches[1]);
+        const { userZoom: uz, effectiveScale: es } = zoomStateRef.current;
+        pinchRef.current = {
+          active: true,
+          startDist: Math.max(10, dist),
+          startZoom: uz,
+          startScale: es,
+          startScrollLeft: vp.scrollLeft,
+          startScrollTop: vp.scrollTop,
+          startMidpointX: midX,
+          startMidpointY: midY,
+        };
+        setIsPinching(true);
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 && pinchRef.current?.active) {
+        e.preventDefault();
+        const { dist, midX, midY } = getTouchMetrics(e.touches[0], e.touches[1]);
+        const p = pinchRef.current;
+        const result = computePinchZoomAndScroll({
+          startZoom: p.startZoom,
+          startScale: p.startScale,
+          startDist: p.startDist,
+          currentDist: dist,
+          startScrollLeft: p.startScrollLeft,
+          startScrollTop: p.startScrollTop,
+          startMidpointX: p.startMidpointX,
+          startMidpointY: p.startMidpointY,
+          currentMidpointX: midX,
+          currentMidpointY: midY,
+          fitScale: zoomStateRef.current.fitScale,
+        });
+        setUserZoom(result.nextZoom);
+        requestAnimationFrame(() => {
+          if (viewportRef.current) {
+            viewportRef.current.scrollLeft = result.nextScrollLeft;
+            viewportRef.current.scrollTop = result.nextScrollTop;
+          }
+        });
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (pinchRef.current?.active && e.touches.length < 2) {
+        pinchRef.current = null;
+        setIsPinching(false);
+        suppressTapAfterPinchRef.current = Date.now() + 260;
+      }
+    };
+
+    const handleWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const { userZoom: uz, effectiveScale: es, fitScale: fs } = zoomStateRef.current;
+      const factor = e.deltaY < 0 ? 1.12 : 0.89;
+      const nextZoom = clampShelfZoom(uz * factor);
+      if (nextZoom === uz) return;
+      const rect = vp.getBoundingClientRect();
+      const midX = e.clientX - rect.left;
+      const midY = e.clientY - rect.top;
+      const nextScale = fs * nextZoom;
+      const contentX = (vp.scrollLeft + midX) / Math.max(0.1, es);
+      const contentY = (vp.scrollTop + midY) / Math.max(0.1, es);
+      setUserZoom(nextZoom);
+      requestAnimationFrame(() => {
+        if (viewportRef.current) {
+          viewportRef.current.scrollLeft = Math.max(0, contentX * nextScale - midX);
+          viewportRef.current.scrollTop = Math.max(0, contentY * nextScale - midY);
+        }
+      });
+    };
+
+    vp.addEventListener('touchstart', handleTouchStart, { passive: false, capture: true });
+    vp.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
+    vp.addEventListener('touchend', handleTouchEnd, { capture: true });
+    vp.addEventListener('touchcancel', handleTouchEnd, { capture: true });
+    vp.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      vp.removeEventListener('touchstart', handleTouchStart, { capture: true });
+      vp.removeEventListener('touchmove', handleTouchMove, { capture: true });
+      vp.removeEventListener('touchend', handleTouchEnd, { capture: true });
+      vp.removeEventListener('touchcancel', handleTouchEnd, { capture: true });
+      vp.removeEventListener('wheel', handleWheel);
+    };
+  }, [viewMode]);
+
+  const handleButtonZoom = useCallback((direction: 'in' | 'out' | 'reset') => {
+    const vp = viewportRef.current;
+    const prevZoom = zoomStateRef.current.userZoom;
+    const prevScale = zoomStateRef.current.effectiveScale;
+    const fs = zoomStateRef.current.fitScale;
+
+    const nextZoom =
+      direction === 'reset' ? 1 : stepShelfZoom(prevZoom, direction);
+
+    if (nextZoom === prevZoom && direction !== 'reset') return;
+    setUserZoom(nextZoom);
+
+    if (vp) {
+      if (direction === 'reset' || nextZoom <= 1) {
+        requestAnimationFrame(() => {
+          if (viewportRef.current) {
+            viewportRef.current.scrollLeft = 0;
+            viewportRef.current.scrollTop = 0;
+          }
+        });
+      } else {
+        const nextScale = fs * nextZoom;
+        const centerX = vp.clientWidth / 2;
+        const centerY = vp.clientHeight / 2;
+        const contentX = (vp.scrollLeft + centerX) / Math.max(0.1, prevScale);
+        const contentY = (vp.scrollTop + centerY) / Math.max(0.1, prevScale);
+        requestAnimationFrame(() => {
+          if (viewportRef.current) {
+            viewportRef.current.scrollLeft = Math.max(0, contentX * nextScale - centerX);
+            viewportRef.current.scrollTop = Math.max(0, contentY * nextScale - centerY);
+          }
+        });
+      }
+    }
+  }, []);
+
   const handleSetCubeUnlocked = (r: number, c: number, unlocked: boolean) => {
     const key = `${r}-${c}`;
     setUnlockedCubeKeys((prev) => {
@@ -190,7 +416,7 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
   const selectedGame = selectedPlaced ? gamesMap[selectedPlaced.gameId] : null;
 
   return (
-    <div className="flex-1 flex flex-col space-y-3.5">
+    <div className="flex-1 min-w-0 w-full flex flex-col space-y-3.5">
       
       {/* Shelf Control & Top Bar */}
       <div className="p-3.5 sm:p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-wrap items-center justify-between gap-3 shadow-lg">
@@ -573,65 +799,143 @@ export const ShelfOverview: React.FC<ShelfOverviewProps> = ({
           />
         </div>
       ) : (
-        /* Physical IKEA Kallax Shelf Representation: White frame and realistic dividers */
-        <div className="w-full flex justify-center overflow-x-auto pb-4">
+        <div className="w-full flex flex-col gap-2">
+          {/* 2D Zoom & Fit Controls Bar (+ / - buttons + pinch hint) */}
+          <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-sm">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-[11px] font-mono font-semibold text-slate-300 whitespace-nowrap">
+                {config.rows}×{config.cols}
+              </span>
+              <span className="text-[10px] text-slate-400 truncate sm:hidden">
+                2 dita per zoomare
+              </span>
+              <span className="hidden sm:inline text-[11px] text-slate-400">
+                Zoom visuale Kallax
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 shrink-0">
+              <button
+                type="button"
+                onClick={() => handleButtonZoom('out')}
+                disabled={userZoom <= MIN_SHELF_ZOOM}
+                className="w-8 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-slate-200 hover:text-amber-300 border border-slate-800 flex items-center justify-center transition-all cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
+                title="Rimpicciolisci visuale (-)"
+                aria-label="Rimpicciolisci visuale"
+              >
+                <Minus className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleButtonZoom('reset')}
+                className={`px-2.5 h-7 rounded-lg text-[11px] font-mono font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                  userZoom === 1
+                    ? 'text-slate-300 bg-slate-900/50'
+                    : 'text-amber-300 bg-amber-500/15 border border-amber-500/40 hover:bg-amber-500/25'
+                }`}
+                title="Ripristina zoom adattato allo schermo (100%)"
+                aria-label="Adatta visuale allo schermo"
+              >
+                <span>{Math.round(userZoom * 100)}%</span>
+                {userZoom !== 1 && <RotateCcw className="w-3 h-3" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleButtonZoom('in')}
+                disabled={userZoom >= MAX_SHELF_ZOOM}
+                className="w-8 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 active:scale-95 text-slate-200 hover:text-amber-300 border border-slate-800 flex items-center justify-center transition-all cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
+                title="Ingrandisci visuale (+)"
+                aria-label="Ingrandisci visuale"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Responsive Auto-Fit + Pinch/Button Zoomable Kallax Viewport */}
           <div
-            className={`relative isolate w-full max-w-4xl p-2.5 sm:p-3.5 rounded-xl sm:rounded-2xl transition-all duration-300 ${frameStyle.frameBg} ${frameStyle.borderColor} border-[8px] sm:border-[12px] shadow-2xl`}
+            ref={viewportRef}
+            data-testid="shelf-2d-viewport"
+            className="w-full max-w-full overflow-auto pb-3 rounded-xl touch-pan-x touch-pan-y"
             style={{
-              maxWidth: '100%',
-              boxShadow: '0 10px 25px -5px rgba(0,0,0,0.6)',
+              maxHeight: userZoom > 1 ? '75vh' : undefined,
             }}
           >
-            {/* Kallax Grid with Realistic Dividers */}
+            {/* Exact scaled layout box so scrollbars & height match visual scale with zero horizontal page overflow */}
             <div
-              className={`grid gap-2 sm:gap-2.5 ${frameStyle.dividerBg} rounded-lg p-0.5`}
+              className="mx-auto relative shrink-0"
               style={{
-                gridTemplateColumns: `repeat(${config.cols}, minmax(130px, 1fr))`,
+                width: `${scaledWidth}px`,
+                height: `${scaledHeight}px`,
               }}
             >
-              {Array.from({ length: config.rows }).map((_, r) =>
-                Array.from({ length: config.cols }).map((_, c) => {
-                  const cubeBoxes = placedBoxes
-                    .filter((p) => p.cubeRow === r && p.cubeCol === c)
-                    .sort((a, b) => a.order - b.order);
+              {/* Physical IKEA Kallax Shelf Frame */}
+              <div
+                ref={shelfFrameRef}
+                data-testid="shelf-2d-frame"
+                className={`absolute top-0 left-0 isolate p-2 sm:p-3.5 rounded-xl sm:rounded-2xl ${frameStyle.frameBg} ${frameStyle.borderColor} border-[6px] sm:border-[12px] shadow-2xl`}
+                style={{
+                  width: `${naturalShelfWidth}px`,
+                  transform: `scale(${effectiveScale})`,
+                  transformOrigin: 'top left',
+                  boxShadow: '0 10px 25px -5px rgba(0,0,0,0.6)',
+                }}
+              >
+                {/* Kallax Grid with Realistic Dividers */}
+                <div
+                  className={`grid gap-1.5 sm:gap-2.5 ${frameStyle.dividerBg} rounded-lg p-0.5`}
+                  style={{
+                    gridTemplateColumns: `repeat(${config.cols}, minmax(0, 1fr))`,
+                  }}
+                >
+                  {Array.from({ length: config.rows }).map((_, r) =>
+                    Array.from({ length: config.cols }).map((_, c) => {
+                      const cubeBoxes = placedBoxes
+                        .filter((p) => p.cubeRow === r && p.cubeCol === c)
+                        .sort((a, b) => a.order - b.order);
 
-                  const cubeKey = `${r}-${c}`;
-                  const isUnlocked = unlockedCubeKeys.has(cubeKey);
-                  // Se ci sono vani con il lucchetto aperto e alcuni con il lucchetto chiuso, quelli con il lucchetto chiuso sono meno luminosi
-                  const isDimmed = unlockedCubeKeys.size > 0 && !isUnlocked;
+                      const cubeKey = `${r}-${c}`;
+                      const isUnlocked = unlockedCubeKeys.has(cubeKey);
+                      const isDimmed = unlockedCubeKeys.size > 0 && !isUnlocked;
 
-                  return (
-                    <KallaxCubeView
-                      key={`${r}-${c}`}
-                      row={r}
-                      col={c}
-                      config={config}
-                      placedBoxes={cubeBoxes}
-                      allPlacedBoxes={placedBoxes}
-                      gamesMap={gamesMap}
-                      selectedBoxId={selectedBoxId}
-                      onSelectBox={onSelectBox}
-                      onOpenCubeDetail={onOpenCubeDetail}
-                      onRotateBox={onRotateBox}
-                      onToggleOrientation={onToggleOrientation}
-                      onSetOrientation={onSetOrientation}
-                      onAutoOptimizeCube={onAutoOptimizeCube}
-                      onDropGame={onDropGame}
-                      onMoveBoxToCube={onMoveBoxToCube}
-                      onUpdatePlacement={onUpdatePlacement}
-                      onReorderBoxes={onReorderBoxes}
-                      onShowToast={onShowToast}
-                      isFreeSortUnlocked={isUnlocked}
-                      isDimmed={isDimmed}
-                      onSetFreeSortUnlocked={(unlocked) => handleSetCubeUnlocked(r, c, unlocked)}
-                      isPointerDropTarget={pointerTargetCube?.row === r && pointerTargetCube?.col === c}
-                      pointerDropCanFit={pointerTargetCube?.canFit ?? true}
-                      onHoverTargetCube={setPointerTargetCube}
-                      viewMode={viewMode}
-                    />
-                  );
-                })
-              )}
+                      return (
+                        <KallaxCubeView
+                          key={`${r}-${c}`}
+                          row={r}
+                          col={c}
+                          config={config}
+                          placedBoxes={cubeBoxes}
+                          allPlacedBoxes={placedBoxes}
+                          gamesMap={gamesMap}
+                          selectedBoxId={selectedBoxId}
+                          onSelectBox={onSelectBox}
+                          onOpenCubeDetail={onOpenCubeDetail}
+                          onRotateBox={onRotateBox}
+                          onToggleOrientation={onToggleOrientation}
+                          onSetOrientation={onSetOrientation}
+                          onAutoOptimizeCube={onAutoOptimizeCube}
+                          onDropGame={onDropGame}
+                          onMoveBoxToCube={onMoveBoxToCube}
+                          onUpdatePlacement={onUpdatePlacement}
+                          onReorderBoxes={onReorderBoxes}
+                          onShowToast={onShowToast}
+                          isFreeSortUnlocked={isUnlocked}
+                          isDimmed={isDimmed}
+                          onSetFreeSortUnlocked={(unlocked) => handleSetCubeUnlocked(r, c, unlocked)}
+                          isPointerDropTarget={pointerTargetCube?.row === r && pointerTargetCube?.col === c}
+                          pointerDropCanFit={pointerTargetCube?.canFit ?? true}
+                          onHoverTargetCube={setPointerTargetCube}
+                          isPinching={isPinching}
+                          suppressTapAfterPinchRef={suppressTapAfterPinchRef}
+                          viewMode={viewMode}
+                        />
+                      );
+                    })
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

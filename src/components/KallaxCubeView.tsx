@@ -59,6 +59,8 @@ interface KallaxCubeViewProps {
   isPointerDropTarget?: boolean;
   pointerDropCanFit?: boolean;
   onHoverTargetCube?: (target: { row: number; col: number; canFit: boolean } | null) => void;
+  isPinching?: boolean;
+  suppressTapAfterPinchRef?: React.RefObject<number>;
   viewMode: '2d' | '3d';
 }
 
@@ -87,6 +89,8 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
   isPointerDropTarget = false,
   pointerDropCanFit = true,
   onHoverTargetCube,
+  isPinching = false,
+  suppressTapAfterPinchRef,
   viewMode,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
@@ -331,6 +335,7 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
   // Pointer Down on box inside KallaxCubeView
   const handleBoxPointerDown = (e: React.PointerEvent<HTMLDivElement>, placed: PlacedBox) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (isPinching) return;
     if (!interiorContainerRef.current) return;
     const currentBox2D = current2DBoxes.find((b) => b.id === placed.id);
     if (!currentBox2D) return;
@@ -512,6 +517,13 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
     setFloatingCrossDrag(null);
     onHoverTargetCube?.(null);
   };
+
+  // Cancel any active box drag when a 2-finger pinch gesture begins
+  React.useEffect(() => {
+    if (isPinching && draggingPlacedId) {
+      resetPointerDragState();
+    }
+  }, [isPinching, draggingPlacedId]);
 
   // Pointer Cancel (e.g., browser native HTML5 drag takeover on desktop mouse or scroll interrupt)
   const handleShelfPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -697,6 +709,7 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
         onClick={(e) => {
           e.stopPropagation();
           if (suppressClickRef.current) return;
+          if (isPinching || (suppressTapAfterPinchRef?.current && Date.now() < suppressTapAfterPinchRef.current)) return;
           onSelectBox(isSelected ? null : placed.id);
         }}
         className={`group/box absolute transition-[transform,box-shadow] cursor-grab active:cursor-grabbing rounded shrink-0 flex items-center justify-center select-none shadow-md ${
@@ -956,7 +969,7 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`relative group rounded-[4px] sm:rounded-md transition-all duration-300 border-2 aspect-square w-full min-h-[160px] sm:min-h-[200px] flex flex-col overflow-hidden select-none ${shelfBgClass} ${
+      className={`relative group rounded-[4px] sm:rounded-md transition-all duration-300 border-2 aspect-square w-full min-h-0 flex flex-col overflow-hidden select-none ${shelfBgClass} ${
         isPointerDropTarget
           ? pointerDropCanFit
             ? 'ring-4 ring-emerald-400 border-emerald-400 bg-emerald-500/20 scale-[1.02] z-30 shadow-2xl'
@@ -1190,9 +1203,10 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
         onPointerCancel={handleShelfPointerCancel}
         onClick={() => {
           if (suppressClickRef.current) return;
+          if (isPinching || (suppressTapAfterPinchRef?.current && Date.now() < suppressTapAfterPinchRef.current)) return;
           if (!isFreeSortUnlocked) onOpenCubeDetail(row, col);
         }}
-        className="relative flex-1 w-full min-h-0 flex items-end justify-start cursor-pointer overflow-hidden p-0 touch-none select-none"
+        className="relative flex-1 w-full min-h-0 flex items-end justify-start cursor-pointer overflow-hidden p-0 touch-pan-x touch-pan-y select-none"
         style={{
           background:
             viewMode === '3d'
@@ -1236,13 +1250,13 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
         )}
 
         {placedBoxes.length === 0 ? (
-          <div className="w-full h-full flex flex-col items-center justify-center text-center p-3 text-slate-500 text-xs pointer-events-none">
-            <span className="font-medium text-slate-400">Vano Vuoto</span>
-            <span className="text-[10px] mt-0.5 text-slate-500">
+          <div className="w-full h-full flex flex-col items-center justify-center text-center p-1.5 sm:p-3 text-slate-500 text-[10px] sm:text-xs pointer-events-none">
+            <span className="font-medium text-slate-400 leading-tight">Vano Vuoto</span>
+            <span className="text-[8.5px] sm:text-[10px] mt-0.5 text-slate-500 leading-tight">
               Trascina qui un gioco o tocca per inserire
             </span>
-            <span className="text-[10px] font-mono text-slate-500 mt-1">
-              33.5 x 33.5 x 39 cm
+            <span className="text-[8.5px] sm:text-[10px] font-mono text-slate-500 mt-0.5 sm:mt-1 leading-tight">
+              33.5 × 33.5 × 39 cm
             </span>
           </div>
         ) : (
@@ -1256,8 +1270,11 @@ export const KallaxCubeView: React.FC<KallaxCubeViewProps> = ({
           <div
             className="fixed pointer-events-none z-50 -translate-x-1/2 -translate-y-full -mt-3 flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-950/95 border-2 shadow-2xl backdrop-blur-md text-xs font-bold text-white whitespace-nowrap"
             style={{
-              left: `${floatingCrossDrag.clientX}px`,
-              top: `${floatingCrossDrag.clientY}px`,
+              left: `${Math.min(
+                (typeof window !== 'undefined' ? window.innerWidth : 400) - 88,
+                Math.max(88, floatingCrossDrag.clientX)
+              )}px`,
+              top: `${Math.max(48, floatingCrossDrag.clientY)}px`,
               borderColor:
                 floatingCrossDrag.targetRow !== null
                   ? floatingCrossDrag.canFit
