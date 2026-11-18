@@ -26,7 +26,7 @@ import {
   clearSingleShelfPlacements,
 } from './utils/shelfActions';
 import { createTimeoutSignal } from './utils/network';
-import { sanitizeBoxImageUrl } from './utils/boxCover';
+import { sanitizeBoxImageUrl, mergeBoxCoverFields } from './utils/boxCover';
 import { ShelfHeader } from './components/ShelfHeader';
 import { ShelfOverview } from './components/ShelfOverview';
 import { LibraryDrawer } from './components/LibraryDrawer';
@@ -257,13 +257,15 @@ export default function App() {
   const requestedCoverIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const placedIdsSet = new Set(shelves.flatMap((s) => s.placedBoxes.map((p) => p.gameId)));
+    const coverRequestKey = (g: GameBox) =>
+      `${g.id}|${g.bggId || 0}|${(g.name || '').trim().toLowerCase()}`;
     const missingCovers = allGames
       .filter((g) => !sanitizeBoxImageUrl(g.thumbnail) && !sanitizeBoxImageUrl(g.image))
-      .filter((g) => !requestedCoverIdsRef.current.has(g.id))
+      .filter((g) => !requestedCoverIdsRef.current.has(coverRequestKey(g)))
       .sort((a, b) => Number(placedIdsSet.has(b.id)) - Number(placedIdsSet.has(a.id)));
 
     if (missingCovers.length === 0) return;
-    missingCovers.forEach((g) => requestedCoverIdsRef.current.add(g.id));
+    missingCovers.forEach((g) => requestedCoverIdsRef.current.add(coverRequestKey(g)));
 
     let cancelled = false;
     (async () => {
@@ -918,20 +920,21 @@ export default function App() {
     });
   };
 
-  const handleSaveGame = (savedGame: GameBox) => {
+  const syncGameInLibraryAndShelf = (syncedGame: GameBox, closeModal: boolean) => {
     setAllGames((prev) => {
-      const exists = prev.some((g) => g.id === savedGame.id);
-      if (exists) {
-        return prev.map((g) => (g.id === savedGame.id ? savedGame : g));
+      const existing = prev.find((g) => g.id === syncedGame.id);
+      if (existing) {
+        const merged = mergeBoxCoverFields(syncedGame, existing, false);
+        return prev.map((g) => (g.id === syncedGame.id ? merged : g));
       }
-      return [savedGame, ...prev];
+      return [mergeBoxCoverFields(syncedGame, null, true), ...prev];
     });
 
     // If this game is placed inside any Kallax cube, resync the cube layout to match new dimensions
     setPlacedBoxes((prev) => {
       const affectedCubes = new Set<string>();
       for (const p of prev) {
-        if (p.gameId === savedGame.id) {
+        if (p.gameId === syncedGame.id) {
           affectedCubes.add(`${p.cubeRow},${p.cubeCol}`);
         }
       }
@@ -945,11 +948,27 @@ export default function App() {
       return current;
     });
 
-    setEditingGame(null);
-    setToast({
-      type: 'success',
-      message: `Scheda BGG e dimensioni di "${savedGame.name}" salvate con successo.`,
-    });
+    if (closeModal) {
+      setEditingGame(null);
+      setToast({
+        type: 'success',
+        message: `Scheda BGG e dimensioni di "${syncedGame.name}" salvate con successo.`,
+      });
+    } else {
+      setEditingGame((prev) =>
+        prev && prev !== 'new' && prev.id === syncedGame.id
+          ? mergeBoxCoverFields(syncedGame, prev, false)
+          : prev
+      );
+    }
+  };
+
+  const handleSaveGame = (savedGame: GameBox) => {
+    syncGameInLibraryAndShelf(savedGame, true);
+  };
+
+  const handleAutoSyncGame = (syncedGame: GameBox) => {
+    syncGameInLibraryAndShelf(syncedGame, false);
   };
 
   const handleDeleteGame = (gameId: string) => {
@@ -1077,19 +1096,23 @@ export default function App() {
         const updated = prev.map((g) => {
           const webResult = resultsMap.get(g.id);
           if (webResult) {
-            return {
-              ...g,
-              bggId: g.bggId || webResult.bggId,
-              width: webResult.width,
-              height: webResult.height,
-              depth: webResult.depth,
-              thumbnail: g.thumbnail || webResult.thumbnail,
-              image: g.image || webResult.image,
-              dimensionSource: webResult.source || 'Ricerca Web',
-              description: g.description
-                ? `${g.description}\n[Dimensioni reali trovate in rete: ${webResult.width}×${webResult.height}×${webResult.depth} cm (${webResult.source})]`
-                : `Dimensioni reali trovate in rete (${webResult.width} × ${webResult.height} × ${webResult.depth} cm - ${webResult.source}).`,
-            };
+            const safeThumb = sanitizeBoxImageUrl(webResult.thumbnail);
+            const safeImg = sanitizeBoxImageUrl(webResult.image) || safeThumb;
+            return mergeBoxCoverFields(
+              {
+                ...g,
+                bggId: g.bggId || webResult.bggId,
+                width: webResult.width,
+                height: webResult.height,
+                depth: webResult.depth,
+                dimensionSource: webResult.source || 'Ricerca Web',
+                description: g.description
+                  ? `${g.description}\n[Dimensioni reali trovate in rete: ${webResult.width}×${webResult.height}×${webResult.depth} cm (${webResult.source})]`
+                  : `Dimensioni reali trovate in rete (${webResult.width} × ${webResult.height} × ${webResult.depth} cm - ${webResult.source}).`,
+              },
+              { thumbnail: safeThumb, image: safeImg },
+              false
+            );
           }
           return g;
         });
@@ -1124,7 +1147,10 @@ export default function App() {
     };
 
     // 1. Prima passa dal catalogo locale verificato per aggiornamenti immediati
-    const immediateMap = new Map<string, { width: number; height: number; depth: number; source: string }>();
+    const immediateMap = new Map<
+      string,
+      { width: number; height: number; depth: number; source: string; bggId?: number; thumbnail?: string; image?: string }
+    >();
     for (const g of needsWebSearch) {
       const local = lookupBoardGameInfo({ bggId: g.bggId, name: g.name });
       if (local.found) {
@@ -1133,6 +1159,9 @@ export default function App() {
           height: local.height,
           depth: local.depth,
           source: 'Catalogo verificato BGG',
+          bggId: local.bggId,
+          thumbnail: sanitizeBoxImageUrl(local.thumbnail),
+          image: sanitizeBoxImageUrl(local.image),
         });
       }
     }
@@ -1171,14 +1200,37 @@ export default function App() {
 
         const data = await resp.json();
         if (Array.isArray(data.results)) {
-          const batchMap = new Map<string, { width: number; height: number; depth: number; source: string }>();
+          const batchMap = new Map<
+            string,
+            { width: number; height: number; depth: number; source: string; bggId?: number; thumbnail?: string; image?: string }
+          >();
+          const coverOnlyMap = new Map<string, { bggId?: number; thumbnail?: string; image?: string }>();
           for (const r of data.results) {
             if (r.foundOnWeb && r.width && r.height && r.depth) {
               batchMap.set(r.id, r);
+            } else if (r?.id && (r.thumbnail || r.image || r.bggId)) {
+              coverOnlyMap.set(r.id, {
+                bggId: r.bggId,
+                thumbnail: sanitizeBoxImageUrl(r.thumbnail),
+                image: sanitizeBoxImageUrl(r.image),
+              });
             }
           }
           if (batchMap.size > 0) {
             applyWebResults(batchMap);
+          }
+          if (coverOnlyMap.size > 0) {
+            setAllGames((prev) =>
+              prev.map((g) => {
+                const hit = coverOnlyMap.get(g.id);
+                if (!hit) return g;
+                return mergeBoxCoverFields(
+                  { ...g, bggId: g.bggId || hit.bggId },
+                  { thumbnail: hit.thumbnail, image: hit.image },
+                  false
+                );
+              })
+            );
           }
         }
       } catch {
@@ -1195,7 +1247,11 @@ export default function App() {
       const chunkSize = 3;
       for (let i = 0; i < pendingBrowserSearch.length; i += chunkSize) {
         const chunk = pendingBrowserSearch.slice(i, i + chunkSize);
-        const chunkMap = new Map<string, { width: number; height: number; depth: number; source: string }>();
+        const chunkMap = new Map<
+          string,
+          { width: number; height: number; depth: number; source: string; thumbnail?: string; image?: string }
+        >();
+        const wikiCoverOnlyMap = new Map<string, { thumbnail: string; image: string }>();
         await Promise.all(
           chunk.map(async (g) => {
             try {
@@ -1203,49 +1259,36 @@ export default function App() {
               if (!cleanName) return;
 
               const wikiRes = await fetch(
-                `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(
+                `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
                   `"${cleanName}" "board game"`
-                )}&utf8=&format=json&origin=*`,
-                { signal: createTimeoutSignal(3000) }
+                )}&gsrlimit=2&prop=extracts|pageimages&explaintext=1&exchars=4000&pithumbsize=400&format=json&origin=*`,
+                { signal: createTimeoutSignal(3500) }
               ).catch(() => null);
 
               if (wikiRes && wikiRes.ok) {
                 const wikiData = await wikiRes.json();
-                const searchHits = wikiData.query?.search || [];
-                const snippets = searchHits
-                  .map((s: any) => s.snippet?.replace(/<[^>]+>/g, ' '))
-                  .join(' ');
-                const parsed = parseDimensionsFromText(snippets);
-                if (parsed && parsed.width > 0 && parsed.height > 0 && parsed.depth > 0) {
-                  chunkMap.set(g.id, {
-                    width: parsed.width,
-                    height: parsed.height,
-                    depth: parsed.depth,
-                    source: 'Wikipedia',
-                  });
-                  return;
+                const pages = Object.values(wikiData.query?.pages || {}) as any[];
+                const wikiThumb = sanitizeBoxImageUrl(
+                  pages.find((p) => typeof p?.thumbnail?.source === 'string')?.thumbnail?.source
+                );
+
+                for (const p of pages) {
+                  const parsed = parseDimensionsFromText(p.extract || '');
+                  if (parsed && parsed.width > 0 && parsed.height > 0 && parsed.depth > 0) {
+                    chunkMap.set(g.id, {
+                      width: parsed.width,
+                      height: parsed.height,
+                      depth: parsed.depth,
+                      source: 'Wikipedia',
+                      thumbnail: wikiThumb,
+                      image: wikiThumb,
+                    });
+                    return;
+                  }
                 }
 
-                // Check full extract of top matching Wikipedia page
-                const topPageId = searchHits[0]?.pageid;
-                if (topPageId) {
-                  const extRes = await fetch(
-                    `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&pageids=${topPageId}&format=json&origin=*`,
-                    { signal: createTimeoutSignal(3000) }
-                  ).catch(() => null);
-                  if (extRes && extRes.ok) {
-                    const extData = await extRes.json();
-                    const pageText = extData.query?.pages?.[String(topPageId)]?.extract || '';
-                    const parsedFull = parseDimensionsFromText(pageText);
-                    if (parsedFull && parsedFull.width > 0 && parsedFull.height > 0 && parsedFull.depth > 0) {
-                      chunkMap.set(g.id, {
-                        width: parsedFull.width,
-                        height: parsedFull.height,
-                        depth: parsedFull.depth,
-                        source: 'Wikipedia',
-                      });
-                    }
-                  }
+                if (wikiThumb) {
+                  wikiCoverOnlyMap.set(g.id, { thumbnail: wikiThumb, image: wikiThumb });
                 }
               }
             } catch {
@@ -1255,6 +1298,14 @@ export default function App() {
         );
         if (chunkMap.size > 0) {
           applyWebResults(chunkMap);
+        }
+        if (wikiCoverOnlyMap.size > 0) {
+          setAllGames((prev) =>
+            prev.map((g) => {
+              const hit = wikiCoverOnlyMap.get(g.id);
+              return hit ? mergeBoxCoverFields(g, hit, false) : g;
+            })
+          );
         }
       }
     }
@@ -1385,9 +1436,14 @@ export default function App() {
       {/* Manual Box Creation or Edit Modal */}
       {editingGame && (
         <BoxEditModal
-          game={editingGame === 'new' ? null : editingGame}
+          game={
+            editingGame === 'new'
+              ? null
+              : allGames.find((g) => g.id === editingGame.id) || editingGame
+          }
           onClose={() => setEditingGame(null)}
           onSave={handleSaveGame}
+          onAutoSyncGame={handleAutoSyncGame}
           onDelete={editingGame !== 'new' ? handleDeleteGame : undefined}
         />
       )}

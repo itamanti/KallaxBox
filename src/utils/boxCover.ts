@@ -87,3 +87,44 @@ export function isAllowedProxyImageHost(hostname: string): boolean {
 export function buildProxyImageUrl(url: string): string {
   return `/api/image-proxy?url=${encodeURIComponent(url)}`;
 }
+
+export function mergeBoxCoverFields<T extends CoverCapableGame>(
+  existing: T,
+  incoming?: CoverCapableGame | null,
+  preferIncoming = false
+): T {
+  const existingThumb = sanitizeBoxImageUrl(existing.thumbnail);
+  const existingImage = sanitizeBoxImageUrl(existing.image);
+  const incomingThumb = sanitizeBoxImageUrl(incoming?.thumbnail);
+  const incomingImage = sanitizeBoxImageUrl(incoming?.image);
+
+  const nextThumbnail = preferIncoming
+    ? incomingThumb || incomingImage || existingThumb || existingImage
+    : existingThumb || incomingThumb || incomingImage || existingImage;
+  const nextImage = preferIncoming
+    ? incomingImage || incomingThumb || existingImage || existingThumb
+    : existingImage || incomingImage || incomingThumb || existingThumb;
+
+  return {
+    ...existing,
+    thumbnail: nextThumbnail,
+    image: nextImage,
+  };
+}
+
+export function pickDisplayCoverUrl(
+  game: CoverCapableGame | undefined | null,
+  failedUrls?: ReadonlySet<string> | null
+): string | undefined {
+  if (!game) return undefined;
+  const primary = resolveBoxCoverUrl(game, false);
+  const fallback = resolveBoxCoverUrl(game, true);
+  if (primary && !(failedUrls && failedUrls.has(primary))) {
+    return primary;
+  }
+  if (fallback && !(failedUrls && failedUrls.has(fallback))) {
+    return fallback;
+  }
+  return undefined;
+}
+

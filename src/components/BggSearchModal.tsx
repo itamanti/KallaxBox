@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { GameBox } from '../types/kallax';
 import { generateBoxColor } from '../utils/kallaxMath';
 import { lookupBoardGameInfo, BOARD_GAME_CATALOG, normalizeGameName } from '../data/boardGameDatabase';
+import { pickDisplayCoverUrl, sanitizeBoxImageUrl } from '../utils/boxCover';
 import {
   X,
   Search,
@@ -33,6 +34,7 @@ export const BggSearchModal: React.FC<BggSearchModalProps> = ({
   const [searchError, setSearchError] = useState<string | null>(null);
   const [loadingGameKey, setLoadingGameKey] = useState<string | null>(null);
   const [importedGameKeys, setImportedGameKeys] = useState<Set<string>>(new Set());
+  const [failedCoverUrls, setFailedCoverUrls] = useState<Set<string>>(() => new Set());
 
   // Collection import state
   const [bggUsername, setBggUsername] = useState('');
@@ -108,7 +110,7 @@ export const BggSearchModal: React.FC<BggSearchModalProps> = ({
         bggId: numericBggId > 0 ? numericBggId : undefined,
         name: itemName,
       });
-      let details: any = localInfo.found ? localInfo : null;
+      let details: any = localInfo.found ? { ...localInfo } : null;
 
       if (!details) {
         try {
@@ -123,6 +125,26 @@ export const BggSearchModal: React.FC<BggSearchModalProps> = ({
         } catch {
           // API unreachable, use search item + local heuristic
         }
+      } else if (!sanitizeBoxImageUrl(details.thumbnail) && !sanitizeBoxImageUrl(item.thumbnail)) {
+        try {
+          const coverResp = await fetch('/api/games/batch-covers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              games: [{ id: 'tmp', name: details.name || itemName, bggId: details.bggId || numericBggId }],
+            }),
+          });
+          if (coverResp.ok) {
+            const coverData = await coverResp.json();
+            const hit = coverData.results?.[0];
+            if (hit?.thumbnail || hit?.image) {
+              details.thumbnail = hit.thumbnail || details.thumbnail;
+              details.image = hit.image || details.image;
+            }
+          }
+        } catch {
+          // ignore
+        }
       }
 
       const d = details || {};
@@ -136,6 +158,16 @@ export const BggSearchModal: React.FC<BggSearchModalProps> = ({
         d.dimensionSource ||
         (info.found ? 'Database verificato' : item.dimensionSource || 'Stima standard');
 
+      const resolvedThumb =
+        sanitizeBoxImageUrl(d.thumbnail) ||
+        sanitizeBoxImageUrl(item.thumbnail) ||
+        sanitizeBoxImageUrl(info.thumbnail);
+      const resolvedImage =
+        sanitizeBoxImageUrl(d.image) ||
+        sanitizeBoxImageUrl(item.image) ||
+        sanitizeBoxImageUrl(info.image) ||
+        resolvedThumb;
+
       const newGame: GameBox = {
         id: `bgg-${resolvedBggId || 'web'}-${Date.now().toString(36)}`,
         name: d.name || itemName || info.name,
@@ -144,8 +176,8 @@ export const BggSearchModal: React.FC<BggSearchModalProps> = ({
         height: resolvedHeight,
         depth: resolvedDepth,
         dimensionSource: resolvedSource,
-        thumbnail: d.thumbnail || item.thumbnail || info.thumbnail,
-        image: d.image || info.image,
+        thumbnail: resolvedThumb,
+        image: resolvedImage,
         year: d.year || item.year || info.year,
         players:
           d.players ||
@@ -336,21 +368,49 @@ export const BggSearchModal: React.FC<BggSearchModalProps> = ({
                       key={`${item.bggId || 0}-${item.name}-${idx}`}
                       className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3 hover:border-slate-700 transition-colors"
                     >
-                      <div className="min-w-0">
-                        <div className="font-bold text-xs text-white truncate">
-                          {item.name}
-                        </div>
-                        <div className="text-[11px] text-slate-400 font-mono flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
-                          <span>
-                            {item.bggId > 0 ? `BGG #${item.bggId}` : 'Ricerca Web'}
-                            {item.year ? ` · Anno ${item.year}` : ''}
-                          </span>
-                          {item.width && item.height && item.depth && (
-                            <span className="text-amber-300 font-semibold">
-                              {item.width} × {item.height} × {item.depth} cm
-                              {item.dimensionSource ? ` · ${item.dimensionSource}` : ''}
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                        {(() => {
+                          const previewUrl = pickDisplayCoverUrl(item, failedCoverUrls);
+                          return (
+                            <div
+                              className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-xs shrink-0 shadow border border-white/20 relative overflow-hidden"
+                              style={{ backgroundColor: generateBoxColor(item.name || 'G') }}
+                            >
+                              <span>{(item.name || 'G').charAt(0).toUpperCase()}</span>
+                              {previewUrl && (
+                                <img
+                                  src={previewUrl}
+                                  alt={item.name}
+                                  referrerPolicy="no-referrer"
+                                  className="absolute inset-0 w-full h-full object-cover"
+                                  onError={() => {
+                                    setFailedCoverUrls((prev) => {
+                                      const next = new Set(prev);
+                                      next.add(previewUrl);
+                                      return next;
+                                    });
+                                  }}
+                                />
+                              )}
+                            </div>
+                          );
+                        })()}
+                        <div className="min-w-0 flex-1">
+                          <div className="font-bold text-xs text-white truncate">
+                            {item.name}
+                          </div>
+                          <div className="text-[11px] text-slate-400 font-mono flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+                            <span>
+                              {item.bggId > 0 ? `BGG #${item.bggId}` : 'Ricerca Web'}
+                              {item.year ? ` · Anno ${item.year}` : ''}
                             </span>
-                          )}
+                            {item.width && item.height && item.depth && (
+                              <span className="text-amber-300 font-semibold">
+                                {item.width} × {item.height} × {item.depth} cm
+                                {item.dimensionSource ? ` · ${item.dimensionSource}` : ''}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
 

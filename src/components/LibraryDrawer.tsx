@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { GameBox, PlacedBox, KallaxConfig } from '../types/kallax';
 import { canGameFitInCube } from '../utils/kallaxMath';
+import { pickDisplayCoverUrl } from '../utils/boxCover';
 import {
   Search,
   Plus,
@@ -63,6 +64,7 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({
   const [touchTargetGame, setTouchTargetGame] = useState<GameBox | null>(null);
   const [gameToDelete, setGameToDelete] = useState<GameBox | null>(null);
   const [isConfirmEmptyOpen, setIsConfirmEmptyOpen] = useState(false);
+  const [failedCoverUrls, setFailedCoverUrls] = useState<Set<string>>(() => new Set());
 
   const placedGameIds = new Set(placedBoxes.map((p) => p.gameId));
 
@@ -281,22 +283,32 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({
                       <GripVertical className="w-3.5 h-3.5 text-slate-600 group-hover/item:text-slate-400 shrink-0 mt-1" />
                       
                       {/* Game Cover Thumbnail with Monogram Fallback */}
-                      <div
-                        className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-xs shrink-0 shadow border border-white/20 relative overflow-hidden"
-                        style={{ backgroundColor: game.color || '#3B82F6' }}
-                      >
-                        <span>{game.name.charAt(0).toUpperCase()}</span>
-                        {game.thumbnail && (
-                          <img
-                            src={game.thumbnail}
-                            alt={game.name}
-                            className="absolute inset-0 w-full h-full object-cover"
-                            onError={(e) => {
-                              (e.target as HTMLElement).style.display = 'none';
-                            }}
-                          />
-                        )}
-                      </div>
+                      {(() => {
+                        const coverUrl = pickDisplayCoverUrl(game, failedCoverUrls);
+                        return (
+                          <div
+                            className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-xs shrink-0 shadow border border-white/20 relative overflow-hidden"
+                            style={{ backgroundColor: game.color || '#3B82F6' }}
+                          >
+                            <span>{game.name.charAt(0).toUpperCase()}</span>
+                            {coverUrl && (
+                              <img
+                                src={coverUrl}
+                                alt={game.name}
+                                referrerPolicy="no-referrer"
+                                className="absolute inset-0 w-full h-full object-cover"
+                                onError={() => {
+                                  setFailedCoverUrls((prev) => {
+                                    const next = new Set(prev);
+                                    next.add(coverUrl);
+                                    return next;
+                                  });
+                                }}
+                              />
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5 flex-wrap">

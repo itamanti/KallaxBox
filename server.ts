@@ -505,15 +505,20 @@ app.get('/api/bgg/search', async (req: Request, res: Response) => {
   }
 
   // Fallback unlinked search entry (bggId: 0 so we never pollute lookups with a fake ID)
-  const webDims = await searchWebBoxDimensions(query);
+  const [webDims, fallbackCover] = await Promise.all([
+    searchWebBoxDimensions(query),
+    fetchOnlineCoverImages(query),
+  ]);
   const info = lookupBoardGameInfo({ name: query });
   const fallbackResult = {
-    bggId: webDims?.bggId || 0,
+    bggId: webDims?.bggId || fallbackCover?.bggId || 0,
     name: query.charAt(0).toUpperCase() + query.slice(1),
     year: new Date().getFullYear(),
     width: webDims ? webDims.width : info.width,
     height: webDims ? webDims.height : info.height,
     depth: webDims ? webDims.depth : info.depth,
+    thumbnail: fallbackCover?.thumbnail || '',
+    image: fallbackCover?.image || '',
     dimensionSource: webDims ? webDims.source : 'Stima standard',
     isEstimate: !webDims,
   };
@@ -821,6 +826,7 @@ app.get('/api/games/web-dimensions', async (req: Request, res: Response) => {
   // 1. Check exact local verified catalog first
   const local = lookupBoardGameInfo({ bggId, name });
   if (local.found) {
+    const cover = !local.thumbnail ? await fetchOnlineCoverImages(local.name || name, local.bggId) : null;
     return res.json({
       found: true,
       foundOnWeb: true,
@@ -828,12 +834,17 @@ app.get('/api/games/web-dimensions', async (req: Request, res: Response) => {
       height: local.height,
       depth: local.depth,
       bggId: local.bggId,
+      thumbnail: local.thumbnail || cover?.thumbnail || undefined,
+      image: local.image || cover?.image || undefined,
       source: 'Database verificato KallaxBox',
     });
   }
 
-  // 2. Search live web sources
-  const webDims = await searchWebBoxDimensions(name || local.name, bggId, year);
+  // 2. Search live web sources + cover image in parallel
+  const [webDims, cover] = await Promise.all([
+    searchWebBoxDimensions(name || local.name, bggId, year),
+    fetchOnlineCoverImages(name || local.name, bggId),
+  ]);
   if (webDims) {
     return res.json({
       found: true,
@@ -841,7 +852,9 @@ app.get('/api/games/web-dimensions', async (req: Request, res: Response) => {
       width: webDims.width,
       height: webDims.height,
       depth: webDims.depth,
-      bggId: webDims.bggId || bggId,
+      bggId: webDims.bggId || cover?.bggId || bggId,
+      thumbnail: cover?.thumbnail || undefined,
+      image: cover?.image || undefined,
       source: webDims.source,
     });
   }
@@ -853,6 +866,9 @@ app.get('/api/games/web-dimensions', async (req: Request, res: Response) => {
     width: local.width,
     height: local.height,
     depth: local.depth,
+    bggId: cover?.bggId || bggId,
+    thumbnail: cover?.thumbnail || undefined,
+    image: cover?.image || undefined,
     source: 'Stima standard',
   });
 });
@@ -916,6 +932,18 @@ app.post('/api/games/batch-web-dimensions', async (req: Request, res: Response) 
               source: webDims.source,
             };
           }
+          return {
+            id: g.id,
+            name: gName,
+            bggId: cover?.bggId || bggId,
+            width: local.width,
+            height: local.height,
+            depth: local.depth,
+            thumbnail: cover?.thumbnail || undefined,
+            image: cover?.image || undefined,
+            foundOnWeb: false,
+            source: 'Stima standard',
+          };
         }
 
         return {
@@ -1206,6 +1234,10 @@ app.get('/api/bgg/game/:id', async (req: Request, res: Response) => {
   const geekdoFromWeb = resolvedBggId && resolvedBggId !== numericId
     ? await fetchGeekdoGameDetails(resolvedBggId, lookupName)
     : null;
+  const fallbackCover =
+    !geekdoFromWeb?.thumbnail && !catalogLookup.thumbnail && (lookupName || resolvedBggId)
+      ? await fetchOnlineCoverImages(lookupName || catalogLookup.name, resolvedBggId)
+      : null;
 
   const finalWidth = webResult ? webResult.width : geekdoFromWeb?.width ?? catalogLookup.width;
   const finalHeight = webResult ? webResult.height : geekdoFromWeb?.height ?? catalogLookup.height;
@@ -1217,10 +1249,10 @@ app.get('/api/bgg/game/:id', async (req: Request, res: Response) => {
     : catalogLookup.description || 'Dimensioni stimate per scaffalatura Kallax.';
 
   return res.json({
-    bggId: resolvedBggId,
+    bggId: resolvedBggId || fallbackCover?.bggId,
     name: geekdoFromWeb?.name || lookupName || catalogLookup.name,
-    thumbnail: geekdoFromWeb?.thumbnail || catalogLookup.thumbnail || '',
-    image: geekdoFromWeb?.image || catalogLookup.image || '',
+    thumbnail: geekdoFromWeb?.thumbnail || catalogLookup.thumbnail || fallbackCover?.thumbnail || '',
+    image: geekdoFromWeb?.image || catalogLookup.image || fallbackCover?.image || '',
     year: geekdoFromWeb?.year || catalogLookup.year || new Date().getFullYear(),
     minPlayers: geekdoFromWeb?.minPlayers || catalogLookup.minPlayers || 2,
     maxPlayers: geekdoFromWeb?.maxPlayers || catalogLookup.maxPlayers || 4,
@@ -1293,11 +1325,17 @@ app.get('/api/bgg/lookup-by-name', async (req: Request, res: Response) => {
       ? `Dimensioni reali trovate in rete (${webResult.width} × ${webResult.height} × ${webResult.depth} cm - ${webResult.source}).`
       : info.description || 'Dimensioni stimate per scaffalatura Kallax.');
 
+  const resolvedBgg = geekdo?.bggId || webResult?.bggId || resolvedIds[0];
+  const fallbackCover =
+    !geekdo?.thumbnail && !info.thumbnail
+      ? await fetchOnlineCoverImages(geekdo?.name || query, resolvedBgg)
+      : null;
+
   return res.json({
-    bggId: geekdo?.bggId || webResult?.bggId || resolvedIds[0],
+    bggId: resolvedBgg || fallbackCover?.bggId,
     name: geekdo?.name || info.name,
-    thumbnail: geekdo?.thumbnail || info.thumbnail || '',
-    image: geekdo?.image || info.image || '',
+    thumbnail: geekdo?.thumbnail || info.thumbnail || fallbackCover?.thumbnail || '',
+    image: geekdo?.image || info.image || fallbackCover?.image || '',
     year: geekdo?.year || info.year || new Date().getFullYear(),
     minPlayers: geekdo?.minPlayers || info.minPlayers || 1,
     maxPlayers: geekdo?.maxPlayers || info.maxPlayers || 4,

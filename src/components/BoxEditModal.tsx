@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { GameBox } from '../types/kallax';
 import { generateBoxColor } from '../utils/kallaxMath';
 import { createTimeoutSignal } from '../utils/network';
+import { pickDisplayCoverUrl, sanitizeBoxImageUrl } from '../utils/boxCover';
 import {
   lookupBoardGameInfo,
   parseDimensionsFromText,
@@ -33,6 +34,7 @@ interface BoxEditModalProps {
   game: GameBox | null; // null for creating new manual box
   onClose: () => void;
   onSave: (game: GameBox) => void;
+  onAutoSyncGame?: (game: GameBox) => void;
   onDelete?: (gameId: string) => void;
 }
 
@@ -64,6 +66,7 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
   game,
   onClose,
   onSave,
+  onAutoSyncGame,
   onDelete,
 }) => {
   const isEditing = !!game;
@@ -71,8 +74,8 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
   const [activeTab, setActiveTab] = useState<'sheet' | 'dimensions' | 'notes'>('sheet');
   const [name, setName] = useState(game?.name || '');
   const [bggId, setBggId] = useState<string>(game?.bggId ? String(game.bggId) : '');
-  const [thumbnail, setThumbnail] = useState(game?.thumbnail || '');
-  const [image, setImage] = useState(game?.image || '');
+  const [thumbnail, setThumbnail] = useState(sanitizeBoxImageUrl(game?.thumbnail) || '');
+  const [image, setImage] = useState(sanitizeBoxImageUrl(game?.image) || '');
   const [width, setWidth] = useState<number>(game?.width || 29.7);
   const [height, setHeight] = useState<number>(game?.height || 29.7);
   const [depth, setDepth] = useState<number>(game?.depth || 7.2);
@@ -88,6 +91,7 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
   const [dimensionSource, setDimensionSource] = useState<string>(
     game?.dimensionSource || (game?.bggId ? 'BGG' : 'Manuale')
   );
+  const [failedCoverUrls, setFailedCoverUrls] = useState<Set<string>>(() => new Set());
 
   // BGG live fetch status
   const [isFetchingBgg, setIsFetchingBgg] = useState(false);
@@ -97,6 +101,160 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
   // Quick BGG snippet paste tool
   const [showPasteTool, setShowPasteTool] = useState(false);
   const [pasteSnippet, setPasteSnippet] = useState('');
+
+  const buildGamePayload = useCallback(
+    (overrides: Partial<GameBox> = {}): GameBox => {
+      const nextWidth = overrides.width ?? width;
+      const nextHeight = overrides.height ?? height;
+      const nextDepth = overrides.depth ?? depth;
+      const nextThumb = sanitizeBoxImageUrl(overrides.thumbnail !== undefined ? overrides.thumbnail : thumbnail);
+      const nextImage = sanitizeBoxImageUrl(overrides.image !== undefined ? overrides.image : image) || nextThumb;
+      const nextName = (overrides.name !== undefined ? overrides.name : name).trim() || game?.name || 'Gioco da Tavolo';
+      const parsedBgg = overrides.bggId !== undefined
+        ? overrides.bggId
+        : (bggId && parseInt(bggId, 10) > 0 ? parseInt(bggId, 10) : undefined);
+
+      return {
+        id: game?.id || `manual-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        name: nextName,
+        bggId: parsedBgg,
+        width: Math.max(1, !isNaN(Number(nextWidth)) && Number(nextWidth) > 0 ? Math.round(Number(nextWidth) * 10) / 10 : 29.7),
+        height: Math.max(1, !isNaN(Number(nextHeight)) && Number(nextHeight) > 0 ? Math.round(Number(nextHeight) * 10) / 10 : 29.7),
+        depth: Math.max(1, !isNaN(Number(nextDepth)) && Number(nextDepth) > 0 ? Math.round(Number(nextDepth) * 10) / 10 : 7.2),
+        dimensionSource: (overrides.dimensionSource !== undefined ? overrides.dimensionSource : dimensionSource).trim() || undefined,
+        thumbnail: nextThumb,
+        image: nextImage,
+        color: overrides.color || color,
+        year: overrides.year !== undefined ? overrides.year : (year && parseInt(year, 10) > 0 ? parseInt(year, 10) : undefined),
+        players: overrides.players !== undefined ? overrides.players : (players.trim() || undefined),
+        playtime: overrides.playtime !== undefined ? overrides.playtime : (playtime && parseInt(playtime, 10) > 0 ? parseInt(playtime, 10) : undefined),
+        minAge: overrides.minAge !== undefined ? overrides.minAge : (minAge && parseInt(minAge, 10) > 0 ? parseInt(minAge, 10) : undefined),
+        rating: overrides.rating !== undefined ? overrides.rating : (rating && !isNaN(parseFloat(rating)) ? Math.round(parseFloat(rating) * 10) / 10 : undefined),
+        weight: overrides.weight !== undefined ? overrides.weight : (weight && !isNaN(parseFloat(weight)) ? Math.round(parseFloat(weight) * 10) / 10 : undefined),
+        description: overrides.description !== undefined ? overrides.description : (description.trim() || undefined),
+        notes: overrides.notes !== undefined ? overrides.notes : (notes.trim() || undefined),
+      };
+    },
+    [
+      game?.id,
+      game?.name,
+      name,
+      bggId,
+      width,
+      height,
+      depth,
+      dimensionSource,
+      thumbnail,
+      image,
+      color,
+      year,
+      players,
+      playtime,
+      minAge,
+      rating,
+      weight,
+      description,
+      notes,
+    ]
+  );
+
+  const persistAutoSync = useCallback(
+    (overrides: Partial<GameBox> = {}) => {
+      if (!isEditing || !onAutoSyncGame) return;
+      onAutoSyncGame(buildGamePayload(overrides));
+    },
+    [isEditing, onAutoSyncGame, buildGamePayload]
+  );
+
+  const fetchMissingCoverForGame = useCallback(
+    async (targetName: string, targetBggId?: number): Promise<{ bggId?: number; thumbnail?: string; image?: string } | null> => {
+      const trimmed = targetName.trim();
+      if (!trimmed && !targetBggId) return null;
+
+      try {
+        const resp = await fetch('/api/games/batch-covers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: createTimeoutSignal(8000),
+          body: JSON.stringify({
+            games: [{ id: game?.id || 'edit-lookup', name: trimmed, bggId: targetBggId }],
+          }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const hit = data.results?.[0];
+          const thumb = sanitizeBoxImageUrl(hit?.thumbnail);
+          const img = sanitizeBoxImageUrl(hit?.image) || thumb;
+          if (thumb || img) {
+            return { bggId: hit?.bggId || targetBggId, thumbnail: thumb || img, image: img || thumb };
+          }
+        }
+      } catch {
+        // Fall through to Wikipedia browser fallback
+      }
+
+      if (trimmed) {
+        try {
+          const cleanName = trimmed.replace(/(\(.*?\)|\[.*?\])/g, '').trim();
+          const wikiRes = await fetch(
+            `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
+              `"${cleanName}" "board game"`
+            )}&gsrlimit=2&prop=pageimages&pithumbsize=400&format=json&origin=*`,
+            { signal: createTimeoutSignal(3500) }
+          ).catch(() => null);
+          if (wikiRes && wikiRes.ok) {
+            const wikiData = await wikiRes.json();
+            const pages = Object.values(wikiData.query?.pages || {}) as any[];
+            const hitUrl = sanitizeBoxImageUrl(
+              pages.find((p) => typeof p?.thumbnail?.source === 'string')?.thumbnail?.source
+            );
+            if (hitUrl) {
+              return { bggId: targetBggId, thumbnail: hitUrl, image: hitUrl };
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return null;
+    },
+    [game?.id]
+  );
+
+  // Keep modal thumbnail/image synced with background hydration updates
+  useEffect(() => {
+    const incomingThumb = sanitizeBoxImageUrl(game?.thumbnail);
+    const incomingImg = sanitizeBoxImageUrl(game?.image);
+    if (!thumbnail && incomingThumb) setThumbnail(incomingThumb);
+    if (!image && incomingImg) setImage(incomingImg);
+  }, [game?.id, game?.thumbnail, game?.image]);
+
+  // If editing an existing game that still lacks a valid cover image, resolve it immediately on open
+  useEffect(() => {
+    if (!isEditing || !game) return;
+    if (pickDisplayCoverUrl({ thumbnail: game.thumbnail, image: game.image })) return;
+
+    let cancelled = false;
+    fetchMissingCoverForGame(game.name, game.bggId).then((hit) => {
+      if (cancelled || !hit) return;
+      const nextThumb = sanitizeBoxImageUrl(hit.thumbnail) || sanitizeBoxImageUrl(hit.image);
+      const nextImg = sanitizeBoxImageUrl(hit.image) || nextThumb;
+      if (nextThumb) setThumbnail(nextThumb);
+      if (nextImg) setImage(nextImg);
+      if (hit.bggId && !bggId) setBggId(String(hit.bggId));
+      if (nextThumb || nextImg) {
+        persistAutoSync({
+          bggId: hit.bggId || game.bggId,
+          thumbnail: nextThumb,
+          image: nextImg,
+        });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditing, game?.id]);
 
   const boxVolumeCm3 = width * height * depth;
   const boxVolumeLiters = Math.round((boxVolumeCm3 / 1000) * 10) / 10;
@@ -210,27 +368,56 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
       // 1. Try local verified dimension database ONLY when strictly matched (localInfo.found)
       const localInfo = lookupBoardGameInfo({ bggId: parsedBggId, name: trimmedName });
       if (localInfo.found) {
+        const nextName = !trimmedName && localInfo.name ? localInfo.name : trimmedName;
         if (!trimmedName && localInfo.name) setName(localInfo.name);
         if (localInfo.bggId) setBggId(String(localInfo.bggId));
         setWidth(localInfo.width);
         setHeight(localInfo.height);
         setDepth(localInfo.depth);
         setDimensionSource('Database verificato');
-        if (localInfo.thumbnail) setThumbnail(localInfo.thumbnail);
-        if (localInfo.image) setImage(localInfo.image);
+
+        let resolvedThumb = sanitizeBoxImageUrl(localInfo.thumbnail) || sanitizeBoxImageUrl(thumbnail);
+        let resolvedImg = sanitizeBoxImageUrl(localInfo.image) || sanitizeBoxImageUrl(image) || resolvedThumb;
+        if (!resolvedThumb) {
+          const cover = await fetchMissingCoverForGame(localInfo.name || trimmedName, localInfo.bggId || parsedBggId);
+          if (cover) {
+            resolvedThumb = cover.thumbnail || resolvedThumb;
+            resolvedImg = cover.image || resolvedThumb || resolvedImg;
+          }
+        }
+        if (resolvedThumb) setThumbnail(resolvedThumb);
+        if (resolvedImg) setImage(resolvedImg);
         if (localInfo.year) setYear(String(localInfo.year));
-        if (localInfo.minPlayers && localInfo.maxPlayers) {
-          setPlayers(
-            localInfo.minPlayers === localInfo.maxPlayers
+        const nextPlayers =
+          localInfo.minPlayers && localInfo.maxPlayers
+            ? localInfo.minPlayers === localInfo.maxPlayers
               ? `${localInfo.minPlayers}`
               : `${localInfo.minPlayers}-${localInfo.maxPlayers}`
-          );
-        }
+            : undefined;
+        if (nextPlayers) setPlayers(nextPlayers);
         if (localInfo.playingTime) setPlaytime(String(localInfo.playingTime));
         if (localInfo.minAge) setMinAge(String(localInfo.minAge));
         if (localInfo.rating !== undefined) setRating(String(localInfo.rating));
         if (localInfo.weight !== undefined) setWeight(String(localInfo.weight));
         if (localInfo.description) setDescription(localInfo.description);
+
+        persistAutoSync({
+          name: nextName,
+          bggId: localInfo.bggId || parsedBggId,
+          width: localInfo.width,
+          height: localInfo.height,
+          depth: localInfo.depth,
+          dimensionSource: 'Database verificato',
+          thumbnail: resolvedThumb,
+          image: resolvedImg,
+          year: localInfo.year,
+          players: nextPlayers,
+          playtime: localInfo.playingTime,
+          minAge: localInfo.minAge,
+          rating: localInfo.rating,
+          weight: localInfo.weight,
+          description: localInfo.description,
+        });
 
         setBggSyncMessage({
           text: `Dimensioni reali e scheda BGG sincronizzate con successo (${localInfo.width} × ${localInfo.height} × ${localInfo.depth} cm)!`,
@@ -261,6 +448,16 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
       }
 
       if (!data) {
+        const cover = await fetchMissingCoverForGame(trimmedName, parsedBggId);
+        if (cover?.thumbnail || cover?.image) {
+          if (cover.thumbnail) setThumbnail(cover.thumbnail);
+          if (cover.image) setImage(cover.image);
+          persistAutoSync({
+            bggId: cover.bggId || parsedBggId,
+            thumbnail: cover.thumbnail,
+            image: cover.image,
+          });
+        }
         setBggSyncMessage({
           text: `Server di ricerca non raggiungibile per "${trimmedName || parsedBggId}". Inserisci le dimensioni manualmente o incolla i dati da BGG.`,
           success: false,
@@ -269,14 +466,31 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
         return;
       }
 
+      const resolvedName = data.name && !trimmedName ? data.name : trimmedName;
       if (data.name && !trimmedName) setName(data.name);
-      if (data.bggId) setBggId(String(data.bggId));
-      if (data.thumbnail) setThumbnail(data.thumbnail);
-      if (data.image) setImage(data.image);
-      if (data.year) setYear(String(data.year));
-      if (data.minPlayers || data.maxPlayers) {
-        setPlayers(data.minPlayers === data.maxPlayers ? `${data.minPlayers}` : `${data.minPlayers}-${data.maxPlayers}`);
+      const resolvedBggId = data.bggId ? Number(data.bggId) : parsedBggId;
+      if (resolvedBggId) setBggId(String(resolvedBggId));
+
+      let resolvedThumb = sanitizeBoxImageUrl(data.thumbnail) || sanitizeBoxImageUrl(thumbnail);
+      let resolvedImg = sanitizeBoxImageUrl(data.image) || sanitizeBoxImageUrl(image) || resolvedThumb;
+      if (!resolvedThumb && (resolvedName || resolvedBggId)) {
+        const cover = await fetchMissingCoverForGame(resolvedName || data.name || trimmedName, resolvedBggId);
+        if (cover) {
+          resolvedThumb = cover.thumbnail || resolvedThumb;
+          resolvedImg = cover.image || resolvedThumb || resolvedImg;
+        }
       }
+      if (resolvedThumb) setThumbnail(resolvedThumb);
+      if (resolvedImg) setImage(resolvedImg);
+
+      if (data.year) setYear(String(data.year));
+      const resolvedPlayers =
+        data.minPlayers || data.maxPlayers
+          ? data.minPlayers === data.maxPlayers
+            ? `${data.minPlayers}`
+            : `${data.minPlayers}-${data.maxPlayers}`
+          : undefined;
+      if (resolvedPlayers) setPlayers(resolvedPlayers);
       if (data.playingTime) setPlaytime(String(data.playingTime));
       if (data.minAge) setMinAge(String(data.minAge));
       if (data.rating !== undefined) setRating(String(data.rating));
@@ -289,21 +503,60 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
           !String(data.dimensionSource).toLowerCase().includes('stima'));
 
       if (foundReal && data.width && data.height && data.depth) {
+        const nextSource = data.dimensionSource || 'BGG';
         setWidth(data.width);
         setHeight(data.height);
         setDepth(data.depth);
-        setDimensionSource(data.dimensionSource || 'BGG');
+        setDimensionSource(nextSource);
+        persistAutoSync({
+          name: resolvedName,
+          bggId: resolvedBggId,
+          width: data.width,
+          height: data.height,
+          depth: data.depth,
+          dimensionSource: nextSource,
+          thumbnail: resolvedThumb,
+          image: resolvedImg,
+          year: data.year || undefined,
+          players: resolvedPlayers,
+          playtime: data.playingTime || undefined,
+          minAge: data.minAge || undefined,
+          rating: data.rating,
+          weight: data.weight,
+          description: data.description || undefined,
+        });
         setBggSyncMessage({
-          text: `Dimensioni reali e scheda sincronizzate con successo (${data.width} × ${data.height} × ${data.depth} cm · ${data.dimensionSource || 'BGG'})!`,
+          text: `Dimensioni reali e scheda sincronizzate con successo (${data.width} × ${data.height} × ${data.depth} cm · ${nextSource})!`,
           success: true,
         });
       } else {
+        const nextW = !isEditing && data.width ? data.width : width;
+        const nextH = !isEditing && data.height ? data.height : height;
+        const nextD = !isEditing && data.depth ? data.depth : depth;
         if (!isEditing && data.width && data.height && data.depth) {
           setWidth(data.width);
           setHeight(data.height);
           setDepth(data.depth);
         }
-        setDimensionSource(data.dimensionSource || 'Stima standard');
+        const nextSource = data.dimensionSource || 'Stima standard';
+        setDimensionSource(nextSource);
+        persistAutoSync({
+          name: resolvedName,
+          bggId: resolvedBggId,
+          width: nextW,
+          height: nextH,
+          depth: nextD,
+          dimensionSource: nextSource,
+          thumbnail: resolvedThumb,
+          image: resolvedImg,
+          year: data.year || undefined,
+          players: resolvedPlayers,
+          playtime: data.playingTime || undefined,
+          minAge: data.minAge || undefined,
+          rating: data.rating,
+          weight: data.weight,
+          description: data.description || undefined,
+        });
         setBggSyncMessage({
           text: `Scheda sincronizzata, ma dimensioni esatte non trovate online per "${trimmedName || data.name}". Inseriscile manualmente o usa "Incolla Misure BGG".`,
           success: false,
@@ -341,6 +594,29 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
         setDepth(local.depth);
         if (local.bggId && !bggId) setBggId(String(local.bggId));
         setDimensionSource('Database verificato');
+
+        let resolvedThumb = sanitizeBoxImageUrl(local.thumbnail) || sanitizeBoxImageUrl(thumbnail);
+        let resolvedImg = sanitizeBoxImageUrl(local.image) || sanitizeBoxImageUrl(image) || resolvedThumb;
+        if (!resolvedThumb) {
+          const cover = await fetchMissingCoverForGame(local.name || trimmed, local.bggId || parsedBggId);
+          if (cover) {
+            resolvedThumb = cover.thumbnail || resolvedThumb;
+            resolvedImg = cover.image || resolvedThumb || resolvedImg;
+          }
+        }
+        if (resolvedThumb) setThumbnail(resolvedThumb);
+        if (resolvedImg) setImage(resolvedImg);
+
+        persistAutoSync({
+          bggId: local.bggId || parsedBggId,
+          width: local.width,
+          height: local.height,
+          depth: local.depth,
+          dimensionSource: 'Database verificato',
+          thumbnail: resolvedThumb,
+          image: resolvedImg,
+        });
+
         setBggSyncMessage({
           text: `Dimensioni trovate nel database verificato (${local.width} × ${local.height} × ${local.depth} cm)!`,
           success: true,
@@ -361,14 +637,31 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
         if (res.ok) {
           backendResponded = true;
           const data = await res.json();
+          const nextBggId = data.bggId && !bggId ? Number(data.bggId) : parsedBggId;
+          if (data.bggId && !bggId) setBggId(String(data.bggId));
+
+          const nextThumb = sanitizeBoxImageUrl(data.thumbnail) || sanitizeBoxImageUrl(thumbnail);
+          const nextImg = sanitizeBoxImageUrl(data.image) || sanitizeBoxImageUrl(image) || nextThumb;
+          if (nextThumb) setThumbnail(nextThumb);
+          if (nextImg) setImage(nextImg);
+
           if ((data.foundOnWeb || data.found) && data.width && data.height && data.depth) {
+            const nextSource = data.source || 'Ricerca Web';
             setWidth(data.width);
             setHeight(data.height);
             setDepth(data.depth);
-            if (data.bggId && !bggId) setBggId(String(data.bggId));
-            setDimensionSource(data.source || 'Ricerca Web');
+            setDimensionSource(nextSource);
+            persistAutoSync({
+              bggId: nextBggId,
+              width: data.width,
+              height: data.height,
+              depth: data.depth,
+              dimensionSource: nextSource,
+              thumbnail: nextThumb,
+              image: nextImg,
+            });
             setBggSyncMessage({
-              text: `Dimensioni reali trovate in rete (${data.width} × ${data.height} × ${data.depth} cm)! Fonte: ${data.source}`,
+              text: `Dimensioni reali trovate in rete (${data.width} × ${data.height} × ${data.depth} cm)! Fonte: ${nextSource}`,
               success: true,
             });
             return;
@@ -380,6 +673,13 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
             setDepth(data.depth);
           }
           setDimensionSource('Stima standard');
+          if (nextThumb || nextImg || (nextBggId && !bggId)) {
+            persistAutoSync({
+              bggId: nextBggId,
+              thumbnail: nextThumb,
+              image: nextImg,
+            });
+          }
           setBggSyncMessage({
             text: data.rateLimited
               ? `Fonti web gratuite senza risultato per "${trimmed}" e ricerca AI temporaneamente limitata (429). Riprova tra un minuto, controlla la quota API in Impostazioni > Secrets, oppure usa "Incolla Misure BGG" / inserimento manuale.`
@@ -398,12 +698,20 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
           const wikiRes = await fetch(
             `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
               `"${trimmed}" "board game"`
-            )}&gsrlimit=2&prop=extracts&explaintext=1&exchars=4000&format=json&origin=*`,
+            )}&gsrlimit=2&prop=extracts|pageimages&explaintext=1&exchars=4000&pithumbsize=400&format=json&origin=*`,
             { signal: createTimeoutSignal(3500) }
           );
           if (wikiRes.ok) {
             const wikiData = await wikiRes.json();
             const pages = Object.values(wikiData.query?.pages || {}) as any[];
+            const wikiThumb = sanitizeBoxImageUrl(
+              pages.find((p) => typeof p?.thumbnail?.source === 'string')?.thumbnail?.source
+            );
+            const resolvedThumb = wikiThumb || sanitizeBoxImageUrl(thumbnail);
+            const resolvedImg = wikiThumb || sanitizeBoxImageUrl(image) || resolvedThumb;
+            if (resolvedThumb) setThumbnail(resolvedThumb);
+            if (resolvedImg) setImage(resolvedImg);
+
             for (const p of pages) {
               const parsed = parseDimensionsFromText(p.extract || '');
               if (parsed && parsed.width > 0 && parsed.height > 0 && parsed.depth > 0) {
@@ -411,12 +719,27 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
                 setHeight(parsed.height);
                 setDepth(parsed.depth);
                 setDimensionSource('Wikipedia');
+                persistAutoSync({
+                  width: parsed.width,
+                  height: parsed.height,
+                  depth: parsed.depth,
+                  dimensionSource: 'Wikipedia',
+                  thumbnail: resolvedThumb,
+                  image: resolvedImg,
+                });
                 setBggSyncMessage({
                   text: `Dimensioni trovate in rete da Wikipedia (${parsed.width} × ${parsed.height} × ${parsed.depth} cm)!`,
                   success: true,
                 });
                 return;
               }
+            }
+
+            if (wikiThumb) {
+              persistAutoSync({
+                thumbnail: resolvedThumb,
+                image: resolvedImg,
+              });
             }
           }
         } catch {
@@ -442,29 +765,7 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-
-    const savedGame: GameBox = {
-      id: game?.id || `manual-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-      name: name.trim(),
-      bggId: bggId && parseInt(bggId, 10) > 0 ? parseInt(bggId, 10) : undefined,
-      width: Math.max(1, !isNaN(Number(width)) && Number(width) > 0 ? Math.round(Number(width) * 10) / 10 : 29.7),
-      height: Math.max(1, !isNaN(Number(height)) && Number(height) > 0 ? Math.round(Number(height) * 10) / 10 : 29.7),
-      depth: Math.max(1, !isNaN(Number(depth)) && Number(depth) > 0 ? Math.round(Number(depth) * 10) / 10 : 7.2),
-      dimensionSource: dimensionSource.trim() || undefined,
-      thumbnail: thumbnail.trim() || undefined,
-      image: image.trim() || undefined,
-      color,
-      year: year && parseInt(year, 10) > 0 ? parseInt(year, 10) : undefined,
-      players: players.trim() || undefined,
-      playtime: playtime && parseInt(playtime, 10) > 0 ? parseInt(playtime, 10) : undefined,
-      minAge: minAge && parseInt(minAge, 10) > 0 ? parseInt(minAge, 10) : undefined,
-      rating: rating && !isNaN(parseFloat(rating)) ? Math.round(parseFloat(rating) * 10) / 10 : undefined,
-      weight: weight && !isNaN(parseFloat(weight)) ? Math.round(parseFloat(weight) * 10) / 10 : undefined,
-      description: description.trim() || undefined,
-      notes: notes.trim() || undefined,
-    };
-
-    onSave(savedGame);
+    onSave(buildGamePayload());
   };
 
   const applyPreset = (preset: typeof PRESET_SIZES[0]) => {
@@ -481,23 +782,33 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
         {/* Header with Game Visual & BGG Sync Action */}
         <div className="px-5 py-4 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between gap-3 sticky top-0 z-20">
           <div className="flex items-center gap-3 min-w-0">
-            {thumbnail ? (
-              <img
-                src={thumbnail}
-                alt={name}
-                className="w-12 h-12 rounded-xl object-cover bg-slate-800 border border-slate-700 shrink-0 shadow-md"
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
-              />
-            ) : (
-              <div
-                className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-base shrink-0 shadow-md border border-white/20"
-                style={{ backgroundColor: color }}
-              >
-                {name.charAt(0).toUpperCase() || 'G'}
-              </div>
-            )}
+            {(() => {
+              const activeCoverUrl = pickDisplayCoverUrl({ thumbnail, image }, failedCoverUrls);
+              return (
+                <div
+                  data-testid="game-detail-preview-square"
+                  className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-base shrink-0 shadow-md border border-white/20 relative overflow-hidden"
+                  style={{ backgroundColor: color }}
+                >
+                  <span>{name.trim().charAt(0).toUpperCase() || 'G'}</span>
+                  {activeCoverUrl && (
+                    <img
+                      src={activeCoverUrl}
+                      alt={name || 'Anteprima scatola'}
+                      referrerPolicy="no-referrer"
+                      className="absolute inset-0 w-full h-full object-cover"
+                      onError={() => {
+                        setFailedCoverUrls((prev) => {
+                          const next = new Set(prev);
+                          next.add(activeCoverUrl);
+                          return next;
+                        });
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })()}
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-bold text-white tracking-tight truncate">

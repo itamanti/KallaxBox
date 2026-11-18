@@ -7,6 +7,8 @@ import {
   shouldShowBoxCoverImage,
   isAllowedProxyImageHost,
   buildProxyImageUrl,
+  mergeBoxCoverFields,
+  pickDisplayCoverUrl,
 } from './boxCover';
 
 test('isValidBoxImageUrl allows real Geekdo original and previewthumb URLs', () => {
@@ -66,3 +68,35 @@ test('buildProxyImageUrl encodes target URL', () => {
     '/api/image-proxy?url=https%3A%2F%2Fcf.geekdo-images.com%2Fa.jpg%3Fx%3D1'
   );
 });
+
+test('mergeBoxCoverFields fills missing thumbnail/image and preserves valid existing covers', () => {
+  const thumb = 'https://cf.geekdo-images.com/thumb.jpg';
+  const img = 'https://cf.geekdo-images.com/orig.jpg';
+
+  const filled = mergeBoxCoverFields({ name: 'Test', thumbnail: '', image: undefined }, { thumbnail: thumb, image: img });
+  assert.equal(filled.thumbnail, thumb);
+  assert.equal(filled.image, img);
+
+  const preserved = mergeBoxCoverFields({ name: 'Test', thumbnail: thumb, image: img }, { thumbnail: '', image: '' }, true);
+  assert.equal(preserved.thumbnail, thumb);
+  assert.equal(preserved.image, img);
+
+  const upgraded = mergeBoxCoverFields(
+    { name: 'Test', thumbnail: 'https://upload.wikimedia.org/old.jpg', image: undefined },
+    { thumbnail: thumb, image: img },
+    true
+  );
+  assert.equal(upgraded.thumbnail, thumb);
+  assert.equal(upgraded.image, img);
+});
+
+test('pickDisplayCoverUrl falls back from failed primary thumbnail to image and then undefined', () => {
+  const thumb = 'https://cf.geekdo-images.com/thumb.jpg';
+  const img = 'https://cf.geekdo-images.com/orig.jpg';
+  const failed = new Set<string>([thumb]);
+
+  assert.equal(pickDisplayCoverUrl({ thumbnail: thumb, image: img }, null), thumb);
+  assert.equal(pickDisplayCoverUrl({ thumbnail: thumb, image: img }, failed), img);
+  assert.equal(pickDisplayCoverUrl({ thumbnail: thumb, image: img }, new Set([thumb, img])), undefined);
+});
+
