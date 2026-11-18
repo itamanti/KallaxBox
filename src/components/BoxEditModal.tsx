@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { GameBox } from '../types/kallax';
 import { generateBoxColor } from '../utils/kallaxMath';
 import { createTimeoutSignal } from '../utils/network';
-import { pickDisplayCoverUrl, sanitizeBoxImageUrl } from '../utils/boxCover';
+import { pickDisplayCoverWithProxy, sanitizeBoxImageUrl } from '../utils/boxCover';
 import {
   lookupBoardGameInfo,
   parseDimensionsFromText,
@@ -229,10 +229,14 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
     if (!image && incomingImg) setImage(incomingImg);
   }, [game?.id, game?.thumbnail, game?.image]);
 
-  // If editing an existing game that still lacks a valid cover image, resolve it immediately on open
+  const repairedCoverKeyRef = useRef<string | null>(null);
+
+  // If editing an existing game that still lacks a valid/working cover image, resolve it immediately on open
   useEffect(() => {
     if (!isEditing || !game) return;
-    if (pickDisplayCoverUrl({ thumbnail: game.thumbnail, image: game.image })) return;
+    if (pickDisplayCoverWithProxy({ thumbnail, image }, failedCoverUrls)) return;
+    if (repairedCoverKeyRef.current === game.id) return;
+    repairedCoverKeyRef.current = game.id;
 
     let cancelled = false;
     fetchMissingCoverForGame(game.name, game.bggId).then((hit) => {
@@ -254,7 +258,7 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isEditing, game?.id]);
+  }, [isEditing, game?.id, thumbnail, image, failedCoverUrls]);
 
   const boxVolumeCm3 = width * height * depth;
   const boxVolumeLiters = Math.round((boxVolumeCm3 / 1000) * 10) / 10;
@@ -783,7 +787,7 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
         <div className="px-5 py-4 border-b border-slate-800 bg-slate-950/80 flex items-center justify-between gap-3 sticky top-0 z-20">
           <div className="flex items-center gap-3 min-w-0">
             {(() => {
-              const activeCoverUrl = pickDisplayCoverUrl({ thumbnail, image }, failedCoverUrls);
+              const activeCoverUrl = pickDisplayCoverWithProxy({ thumbnail, image }, failedCoverUrls);
               return (
                 <div
                   data-testid="game-detail-preview-square"
@@ -793,6 +797,7 @@ export const BoxEditModal: React.FC<BoxEditModalProps> = ({
                   <span>{name.trim().charAt(0).toUpperCase() || 'G'}</span>
                   {activeCoverUrl && (
                     <img
+                      key={activeCoverUrl}
                       src={activeCoverUrl}
                       alt={name || 'Anteprima scatola'}
                       referrerPolicy="no-referrer"

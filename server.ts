@@ -359,7 +359,7 @@ async function fetchOnlineCoverImages(
     }
   }
 
-  coverImagesCache.set(cacheKey, { result: null, expiresAt: Date.now() + 10 * 60_000 });
+  coverImagesCache.set(cacheKey, { result: null, expiresAt: Date.now() + 60_000 });
   return null;
 }
 

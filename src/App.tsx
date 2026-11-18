@@ -26,7 +26,12 @@ import {
   clearSingleShelfPlacements,
 } from './utils/shelfActions';
 import { createTimeoutSignal } from './utils/network';
-import { sanitizeBoxImageUrl, mergeBoxCoverFields } from './utils/boxCover';
+import {
+  sanitizeBoxImageUrl,
+  mergeBoxCoverFields,
+  coverHydrationKey,
+  selectNextMissingCoverBatch,
+} from './utils/boxCover';
 import { ShelfHeader } from './components/ShelfHeader';
 import { ShelfOverview } from './components/ShelfOverview';
 import { LibraryDrawer } from './components/LibraryDrawer';
@@ -255,115 +260,144 @@ export default function App() {
 
   // Background online cover image hydration for shelf & library games missing cover URLs
   const requestedCoverIdsRef = useRef<Set<string>>(new Set());
+  const isHydratingCoversRef = useRef<boolean>(false);
+  const isMountedRef = useRef<boolean>(true);
+  const latestGamesRef = useRef<GameBox[]>(allGames);
+  const latestShelvesRef = useRef<ShelfUnit[]>(shelves);
+  latestGamesRef.current = allGames;
+  latestShelvesRef.current = shelves;
+
   useEffect(() => {
-    const placedIdsSet = new Set(shelves.flatMap((s) => s.placedBoxes.map((p) => p.gameId)));
-    const coverRequestKey = (g: GameBox) =>
-      `${g.id}|${g.bggId || 0}|${(g.name || '').trim().toLowerCase()}`;
-    const missingCovers = allGames
-      .filter((g) => !sanitizeBoxImageUrl(g.thumbnail) && !sanitizeBoxImageUrl(g.image))
-      .filter((g) => !requestedCoverIdsRef.current.has(coverRequestKey(g)))
-      .sort((a, b) => Number(placedIdsSet.has(b.id)) - Number(placedIdsSet.has(a.id)));
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
-    if (missingCovers.length === 0) return;
-    missingCovers.forEach((g) => requestedCoverIdsRef.current.add(coverRequestKey(g)));
+  useEffect(() => {
+    if (isHydratingCoversRef.current) return;
 
-    let cancelled = false;
+    const initialPlacedSet = new Set(
+      latestShelvesRef.current.flatMap((s) => s.placedBoxes.map((p) => p.gameId))
+    );
+    const hasPending =
+      selectNextMissingCoverBatch(
+        latestGamesRef.current,
+        initialPlacedSet,
+        requestedCoverIdsRef.current,
+        1
+      ).length > 0;
+
+    if (!hasPending) return;
+    isHydratingCoversRef.current = true;
+
     (async () => {
-      const batchSize = 12;
+      const batchSize = 6;
       let backendAvailable = true;
 
-      for (let i = 0; i < missingCovers.length && !cancelled; i += batchSize) {
-        const batch = missingCovers.slice(i, i + batchSize);
-        let appliedFromBackend = false;
+      try {
+        while (isMountedRef.current) {
+          const placedIdsSet = new Set(
+            latestShelvesRef.current.flatMap((s) => s.placedBoxes.map((p) => p.gameId))
+          );
+          const batch = selectNextMissingCoverBatch(
+            latestGamesRef.current,
+            placedIdsSet,
+            requestedCoverIdsRef.current,
+            batchSize
+          );
+          if (batch.length === 0) break;
 
-        if (backendAvailable) {
-          try {
-            const resp = await fetch('/api/games/batch-covers', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              signal: createTimeoutSignal(12000),
-              body: JSON.stringify({
-                games: batch.map((g) => ({
-                  id: g.id,
-                  name: g.name,
-                  bggId: g.bggId,
-                })),
-              }),
-            });
+          // Mark only the current batch as attempted so an interruption never skips remaining batches
+          batch.forEach((g) => requestedCoverIdsRef.current.add(coverHydrationKey(g)));
 
-            if (resp.ok) {
-              const data = await resp.json();
-              const coverMap = new Map<string, { bggId?: number; thumbnail?: string; image?: string }>();
-              for (const r of data.results || []) {
-                if (r?.id && (r.thumbnail || r.image)) {
-                  coverMap.set(r.id, r);
-                }
-              }
-              if (coverMap.size > 0 && !cancelled) {
-                setAllGames((prev) =>
-                  prev.map((g) => {
-                    const hit = coverMap.get(g.id);
-                    if (!hit) return g;
-                    return {
-                      ...g,
-                      bggId: g.bggId || hit.bggId,
-                      thumbnail: hit.thumbnail || g.thumbnail,
-                      image: hit.image || g.image,
-                    };
-                  })
-                );
-              }
-              appliedFromBackend = true;
-            } else if (resp.status === 404 || resp.status === 405) {
-              backendAvailable = false;
-            }
-          } catch {
-            if (i === 0) backendAvailable = false;
-          }
-        }
+          const batchMap = new Map<string, { bggId?: number; thumbnail?: string; image?: string }>();
 
-        // Static / offline fallback via Wikipedia CORS pageimages
-        if (!appliedFromBackend && !cancelled) {
-          const fallbackMap = new Map<string, { thumbnail: string; image: string }>();
-          await Promise.all(
-            batch.slice(0, 6).map(async (g) => {
-              try {
-                const cleanName = (g.name || '').replace(/(\(.*?\)|\[.*?\])/g, '').trim();
-                if (!cleanName) return;
-                const wikiRes = await fetch(
-                  `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
-                    `"${cleanName}" "board game"`
-                  )}&gsrlimit=2&prop=pageimages&pithumbsize=400&format=json&origin=*`,
-                  { signal: createTimeoutSignal(3500) }
-                ).catch(() => null);
-                if (wikiRes && wikiRes.ok) {
-                  const data = await wikiRes.json();
-                  const pages = Object.values(data.query?.pages || {}) as any[];
-                  const hitUrl = pages.find((p) => typeof p?.thumbnail?.source === 'string')?.thumbnail?.source;
-                  if (hitUrl) {
-                    fallbackMap.set(g.id, { thumbnail: hitUrl, image: hitUrl });
+          if (backendAvailable) {
+            try {
+              const resp = await fetch('/api/games/batch-covers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: createTimeoutSignal(20000),
+                body: JSON.stringify({
+                  games: batch.map((g) => ({
+                    id: g.id,
+                    name: g.name,
+                    bggId: g.bggId,
+                  })),
+                }),
+              });
+
+              if (resp.ok) {
+                const data = await resp.json();
+                for (const r of data.results || []) {
+                  const thumb = sanitizeBoxImageUrl(r?.thumbnail);
+                  const img = sanitizeBoxImageUrl(r?.image) || thumb;
+                  if (r?.id && (thumb || img)) {
+                    batchMap.set(r.id, {
+                      bggId: r.bggId,
+                      thumbnail: thumb || img,
+                      image: img || thumb,
+                    });
                   }
                 }
-              } catch {
-                // ignore
+              } else if (resp.status === 404 || resp.status === 405) {
+                backendAvailable = false;
               }
-            })
-          );
-          if (fallbackMap.size > 0 && !cancelled) {
+            } catch {
+              // Transient network timeout: leave backendAvailable=true for next batch, fall back to Wikipedia for this batch
+            }
+          }
+
+          // Fallback via Wikipedia CORS pageimages for any item in this batch still missing a cover
+          const unresolvedInBatch = batch.filter((g) => !batchMap.has(g.id));
+          if (unresolvedInBatch.length > 0 && isMountedRef.current) {
+            await Promise.all(
+              unresolvedInBatch.map(async (g) => {
+                try {
+                  const cleanName = (g.name || '').replace(/(\(.*?\)|\[.*?\])/g, '').trim();
+                  if (!cleanName) return;
+                  const wikiRes = await fetch(
+                    `https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(
+                      `"${cleanName}" "board game"`
+                    )}&gsrlimit=2&prop=pageimages&pithumbsize=400&format=json&origin=*`,
+                    { signal: createTimeoutSignal(4000) }
+                  ).catch(() => null);
+                  if (wikiRes && wikiRes.ok) {
+                    const data = await wikiRes.json();
+                    const pages = Object.values(data.query?.pages || {}) as any[];
+                    const hitUrl = sanitizeBoxImageUrl(
+                      pages.find((p) => typeof p?.thumbnail?.source === 'string')?.thumbnail?.source
+                    );
+                    if (hitUrl) {
+                      batchMap.set(g.id, { thumbnail: hitUrl, image: hitUrl });
+                    }
+                  }
+                } catch {
+                  // ignore single fallback miss
+                }
+              })
+            );
+          }
+
+          if (batchMap.size > 0 && isMountedRef.current) {
             setAllGames((prev) =>
               prev.map((g) => {
-                const hit = fallbackMap.get(g.id);
-                return hit ? { ...g, thumbnail: g.thumbnail || hit.thumbnail, image: g.image || hit.image } : g;
+                const hit = batchMap.get(g.id);
+                if (!hit) return g;
+                return mergeBoxCoverFields(
+                  { ...g, bggId: g.bggId || hit.bggId },
+                  { thumbnail: hit.thumbnail, image: hit.image },
+                  false
+                );
               })
             );
           }
         }
+      } finally {
+        isHydratingCoversRef.current = false;
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [allGames, shelves]);
 
   // Multi-shelf actions

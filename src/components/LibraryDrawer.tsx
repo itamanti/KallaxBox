@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { GameBox, PlacedBox, KallaxConfig } from '../types/kallax';
 import { canGameFitInCube } from '../utils/kallaxMath';
-import { pickDisplayCoverUrl } from '../utils/boxCover';
+import { pickDisplayCoverWithProxy } from '../utils/boxCover';
 import {
   Search,
   Plus,
@@ -282,9 +282,9 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({
                     >
                       <GripVertical className="w-3.5 h-3.5 text-slate-600 group-hover/item:text-slate-400 shrink-0 mt-1" />
                       
-                      {/* Game Cover Thumbnail with Monogram Fallback */}
+                      {/* Game Cover Thumbnail with Monogram & Proxy Fallback */}
                       {(() => {
-                        const coverUrl = pickDisplayCoverUrl(game, failedCoverUrls);
+                        const coverUrl = pickDisplayCoverWithProxy(game, failedCoverUrls);
                         return (
                           <div
                             className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-xs shrink-0 shadow border border-white/20 relative overflow-hidden"
@@ -293,8 +293,10 @@ export const LibraryDrawer: React.FC<LibraryDrawerProps> = ({
                             <span>{game.name.charAt(0).toUpperCase()}</span>
                             {coverUrl && (
                               <img
+                                key={coverUrl}
                                 src={coverUrl}
                                 alt={game.name}
+                                loading="lazy"
                                 referrerPolicy="no-referrer"
                                 className="absolute inset-0 w-full h-full object-cover"
                                 onError={() => {

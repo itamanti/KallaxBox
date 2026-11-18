@@ -9,6 +9,9 @@ import {
   buildProxyImageUrl,
   mergeBoxCoverFields,
   pickDisplayCoverUrl,
+  pickDisplayCoverWithProxy,
+  coverHydrationKey,
+  selectNextMissingCoverBatch,
 } from './boxCover';
 
 test('isValidBoxImageUrl allows real Geekdo original and previewthumb URLs', () => {
@@ -99,4 +102,49 @@ test('pickDisplayCoverUrl falls back from failed primary thumbnail to image and 
   assert.equal(pickDisplayCoverUrl({ thumbnail: thumb, image: img }, failed), img);
   assert.equal(pickDisplayCoverUrl({ thumbnail: thumb, image: img }, new Set([thumb, img])), undefined);
 });
+
+test('pickDisplayCoverWithProxy falls back to /api/image-proxy for allowed CDN URLs after direct failure', () => {
+  const thumb = 'https://cf.geekdo-images.com/thumb.jpg';
+  const img = 'https://cf.geekdo-images.com/orig.jpg';
+  const proxyThumb = buildProxyImageUrl(thumb);
+
+  assert.equal(pickDisplayCoverWithProxy({ thumbnail: thumb, image: img }, new Set()), thumb);
+  assert.equal(pickDisplayCoverWithProxy({ thumbnail: thumb, image: img }, new Set([thumb, img])), proxyThumb);
+  assert.equal(
+    pickDisplayCoverWithProxy({ thumbnail: thumb, image: img }, new Set([thumb, img, proxyThumb, buildProxyImageUrl(img)])),
+    undefined
+  );
+  assert.equal(
+    pickDisplayCoverWithProxy({ thumbnail: 'https://evil.example.com/x.jpg' }, new Set(['https://evil.example.com/x.jpg'])),
+    undefined
+  );
+});
+
+test('selectNextMissingCoverBatch incrementally selects unattempted games prioritizing placed boxes', () => {
+  const games = Array.from({ length: 15 }, (_, idx) => ({
+    id: `g-${idx}`,
+    name: `Game ${idx}`,
+    bggId: idx + 100,
+    thumbnail: idx === 0 ? 'https://cf.geekdo-images.com/existing.jpg' : undefined,
+    image: undefined,
+  }));
+  const placedIds = new Set(['g-12', 'g-14']);
+  const attempted = new Set<string>();
+
+  const batch1 = selectNextMissingCoverBatch(games, placedIds, attempted, 6);
+  assert.equal(batch1.length, 6);
+  assert.equal(batch1[0].id, 'g-12');
+  assert.equal(batch1[1].id, 'g-14');
+  assert.ok(!batch1.some((g) => g.id === 'g-0'));
+
+  batch1.forEach((g) => attempted.add(coverHydrationKey(g)));
+  const batch2 = selectNextMissingCoverBatch(games, placedIds, attempted, 6);
+  assert.equal(batch2.length, 6);
+  assert.ok(batch2.every((g) => !batch1.some((b) => b.id === g.id)));
+
+  batch2.forEach((g) => attempted.add(coverHydrationKey(g)));
+  const batch3 = selectNextMissingCoverBatch(games, placedIds, attempted, 6);
+  assert.equal(batch3.length, 2);
+});
+
 

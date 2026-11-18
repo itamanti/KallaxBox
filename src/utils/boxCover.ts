@@ -128,3 +128,59 @@ export function pickDisplayCoverUrl(
   return undefined;
 }
 
+export function pickDisplayCoverWithProxy(
+  game: CoverCapableGame | undefined | null,
+  failedUrls?: ReadonlySet<string> | null
+): string | undefined {
+  const direct = pickDisplayCoverUrl(game, failedUrls);
+  if (direct) return direct;
+  if (!game) return undefined;
+
+  const candidates = [
+    resolveBoxCoverUrl(game, false),
+    resolveBoxCoverUrl(game, true),
+  ].filter((u): u is string => Boolean(u));
+
+  for (const rawUrl of candidates) {
+    if (rawUrl.startsWith('/')) continue;
+    try {
+      const parsed = new URL(rawUrl);
+      if (parsed.protocol === 'https:' && isAllowedProxyImageHost(parsed.hostname)) {
+        const proxyUrl = buildProxyImageUrl(rawUrl);
+        if (!(failedUrls && failedUrls.has(proxyUrl))) {
+          return proxyUrl;
+        }
+      }
+    } catch {
+      // ignore invalid URL
+    }
+  }
+
+  return undefined;
+}
+
+export interface CoverHydrationGame extends CoverCapableGame {
+  id: string;
+  name: string;
+  bggId?: number;
+}
+
+export function coverHydrationKey(game: Pick<CoverHydrationGame, 'id' | 'name' | 'bggId'>): string {
+  return `${game.id}|${game.bggId || 0}|${(game.name || '').trim().toLowerCase()}`;
+}
+
+export function selectNextMissingCoverBatch<T extends CoverHydrationGame>(
+  games: readonly T[],
+  placedGameIds: ReadonlySet<string>,
+  attemptedKeys: ReadonlySet<string>,
+  batchSize = 6
+): T[] {
+  if (batchSize <= 0 || games.length === 0) return [];
+  const missing = games
+    .filter((g) => !sanitizeBoxImageUrl(g.thumbnail) && !sanitizeBoxImageUrl(g.image))
+    .filter((g) => !attemptedKeys.has(coverHydrationKey(g)))
+    .sort((a, b) => Number(placedGameIds.has(b.id)) - Number(placedGameIds.has(a.id)));
+  return missing.slice(0, batchSize);
+}
+
+
